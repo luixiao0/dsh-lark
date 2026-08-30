@@ -39,6 +39,9 @@ const EMPTY_FORM = {
 	dmMode: "open",
 	groupAllowlist: "",
 	dmAllowlist: "",
+	homeChatId: "",
+	groupBatchDelayMs: "1500",
+	silentReplyToken: "NO_REPLY",
 	provider: "",
 	model: "",
 	workspace: "",
@@ -62,6 +65,9 @@ function LarkSettingsSection({ t, loadModels }) {
 			dmMode: next.settings.dmMode,
 			groupAllowlist: next.settings.groupAllowlist.join("\n"),
 			dmAllowlist: next.settings.dmAllowlist.join("\n"),
+			homeChatId: next.settings.homeChatId,
+			groupBatchDelayMs: String(next.settings.groupBatchDelayMs),
+			silentReplyToken: next.settings.silentReplyToken,
 			provider: next.settings.provider ?? "",
 			model: next.settings.model ?? "",
 			workspace: next.settings.workspace ?? "",
@@ -114,6 +120,9 @@ function LarkSettingsSection({ t, loadModels }) {
 			dmMode: form.dmMode,
 			groupAllowlist: lines(form.groupAllowlist),
 			dmAllowlist: lines(form.dmAllowlist),
+			homeChatId: form.homeChatId.trim(),
+			groupBatchDelayMs: Number(form.groupBatchDelayMs),
+			silentReplyToken: form.silentReplyToken.trim(),
 			errorMessage: form.errorMessage
 		};
 		for (const key of [
@@ -283,7 +292,25 @@ function LarkSettingsSection({ t, loadModels }) {
 									onChange: (event) => update("dmAllowlist", event.target.value),
 									placeholder: t("onePerLine")
 								})] })]
-							})
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								className: "dsh-lark-grid",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("homeChatId") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(__deepseek_ai_dsh_client_ui_primitives.Input, {
+									value: form.homeChatId,
+									onChange: (event) => update("homeChatId", event.target.value)
+								})] }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("groupBatchDelayMs") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(__deepseek_ai_dsh_client_ui_primitives.Input, {
+									type: "number",
+									min: "0",
+									max: "30000",
+									step: "100",
+									value: form.groupBatchDelayMs,
+									onChange: (event) => update("groupBatchDelayMs", event.target.value)
+								})] })]
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("silentReplyToken") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(__deepseek_ai_dsh_client_ui_primitives.Input, {
+								value: form.silentReplyToken,
+								onChange: (event) => update("silentReplyToken", event.target.value)
+							})] })
 						]
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -446,6 +473,9 @@ const dictionaries = {
 		groupAllowlist: "群聊白名单",
 		dmAllowlist: "用户白名单",
 		onePerLine: "每行一个 ID",
+		homeChatId: "默认主动发送群",
+		groupBatchDelayMs: "群消息聚合窗口（毫秒）",
+		silentReplyToken: "静默回复标记",
 		agent: "Agent 配置",
 		provider: "Provider",
 		model: "Model",
@@ -489,6 +519,9 @@ const dictionaries = {
 		groupAllowlist: "Group allowlist",
 		dmAllowlist: "User allowlist",
 		onePerLine: "One ID per line",
+		homeChatId: "Default outbound chat",
+		groupBatchDelayMs: "Group batching window (ms)",
+		silentReplyToken: "Silent reply token",
 		agent: "Agent configuration",
 		provider: "Provider",
 		model: "Model",

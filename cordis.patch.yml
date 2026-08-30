@@ -9,3 +9,5 @@
         domain: feishu
         requireMention: true
         dmMode: open
+        groupBatchDelayMs: 1500
+        silentReplyToken: NO_REPLY

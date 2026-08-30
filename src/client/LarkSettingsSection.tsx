@@ -13,6 +13,9 @@ interface SettingsPayload {
     dmMode: 'open' | 'allowlist' | 'disabled'
     groupAllowlist: string[]
     dmAllowlist: string[]
+    homeChatId: string
+    groupBatchDelayMs: number
+    silentReplyToken: string
     provider?: string
     model?: string
     workspace?: string
@@ -31,6 +34,9 @@ interface FormState {
   dmMode: 'open' | 'allowlist' | 'disabled'
   groupAllowlist: string
   dmAllowlist: string
+  homeChatId: string
+  groupBatchDelayMs: string
+  silentReplyToken: string
   provider: string
   model: string
   workspace: string
@@ -63,7 +69,8 @@ interface LarkSettingsSectionProps {
 
 const EMPTY_FORM: FormState = {
   appId: '', appSecret: '', domain: 'feishu', requireMention: true, dmMode: 'open',
-  groupAllowlist: '', dmAllowlist: '', provider: '', model: '', workspace: '', agentPreset: '', errorMessage: '',
+  groupAllowlist: '', dmAllowlist: '', homeChatId: '', groupBatchDelayMs: '1500', silentReplyToken: 'NO_REPLY',
+  provider: '', model: '', workspace: '', agentPreset: '', errorMessage: '',
 }
 
 export function LarkSettingsSection({ t, loadModels }: LarkSettingsSectionProps): JSX.Element {
@@ -84,6 +91,9 @@ export function LarkSettingsSection({ t, loadModels }: LarkSettingsSectionProps)
       dmMode: next.settings.dmMode,
       groupAllowlist: next.settings.groupAllowlist.join('\n'),
       dmAllowlist: next.settings.dmAllowlist.join('\n'),
+      homeChatId: next.settings.homeChatId,
+      groupBatchDelayMs: String(next.settings.groupBatchDelayMs),
+      silentReplyToken: next.settings.silentReplyToken,
       provider: next.settings.provider ?? '',
       model: next.settings.model ?? '',
       workspace: next.settings.workspace ?? '',
@@ -130,7 +140,9 @@ export function LarkSettingsSection({ t, loadModels }: LarkSettingsSectionProps)
     const body: Record<string, unknown> = {
       expectedRevision: payload?.revision,
       appId: form.appId.trim(), domain: form.domain, requireMention: form.requireMention, dmMode: form.dmMode,
-      groupAllowlist: lines(form.groupAllowlist), dmAllowlist: lines(form.dmAllowlist), errorMessage: form.errorMessage,
+      groupAllowlist: lines(form.groupAllowlist), dmAllowlist: lines(form.dmAllowlist),
+      homeChatId: form.homeChatId.trim(), groupBatchDelayMs: Number(form.groupBatchDelayMs),
+      silentReplyToken: form.silentReplyToken.trim(), errorMessage: form.errorMessage,
     }
     for (const key of ['provider', 'model', 'workspace', 'agentPreset'] as const) {
       body[key] = form[key].trim() === '' ? null : form[key].trim()
@@ -217,6 +229,11 @@ export function LarkSettingsSection({ t, loadModels }: LarkSettingsSectionProps)
           <label><span>{t('groupAllowlist')}</span><textarea value={form.groupAllowlist} onChange={event => update('groupAllowlist', event.target.value)} placeholder={t('onePerLine')} /></label>
           <label><span>{t('dmAllowlist')}</span><textarea value={form.dmAllowlist} onChange={event => update('dmAllowlist', event.target.value)} placeholder={t('onePerLine')} /></label>
         </div>
+        <div className="dsh-lark-grid">
+          <label><span>{t('homeChatId')}</span><Input value={form.homeChatId} onChange={event => update('homeChatId', event.target.value)} /></label>
+          <label><span>{t('groupBatchDelayMs')}</span><Input type="number" min="0" max="30000" step="100" value={form.groupBatchDelayMs} onChange={event => update('groupBatchDelayMs', event.target.value)} /></label>
+        </div>
+        <label><span>{t('silentReplyToken')}</span><Input value={form.silentReplyToken} onChange={event => update('silentReplyToken', event.target.value)} /></label>
       </div>
 
       <div className="dsh-lark-card">

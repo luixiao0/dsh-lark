@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { LarkRuntime } from '../src/runtime.ts'
 import { resolveSettingsConfig } from '../src/config.ts'
 
+const active = (stop: () => Promise<void> = vi.fn(async () => undefined)) => ({
+  stop,
+  send: vi.fn(async () => ({ messageId: 'out' })),
+})
+
 describe('LarkRuntime', () => {
   it('stays idle until both application credentials are configured', async () => {
     const start = vi.fn()
@@ -21,7 +26,7 @@ describe('LarkRuntime', () => {
     const start = vi.fn(async () => {
       const stop = vi.fn(async () => undefined)
       stops.push(stop)
-      return stop
+      return active(stop)
     })
     const runtime = new LarkRuntime({ settings: () => config, resolveSecret: async () => 'secret', start })
     await runtime.reconcile()
@@ -37,7 +42,7 @@ describe('LarkRuntime', () => {
   it('replaces the channel after the credential value changes', async () => {
     let secret = 'first'
     const stop = vi.fn(async () => undefined)
-    const start = vi.fn(async () => stop)
+    const start = vi.fn(async () => active(stop))
     const runtime = new LarkRuntime({
       settings: () => resolveSettingsConfig({ appId: 'id' }),
       resolveSecret: async () => secret,
@@ -55,12 +60,25 @@ describe('LarkRuntime', () => {
     const runtime = new LarkRuntime({
       settings: () => resolveSettingsConfig({ appId: 'id' }),
       resolveSecret: async () => 'secret',
-      start: async () => stop,
+      start: async () => active(stop),
     })
     await runtime.reconcile()
     await runtime.dispose()
     expect(stop).toHaveBeenCalledOnce()
     expect(runtime.status()).toMatchObject({ state: 'stopped' })
+  })
+
+  it('forwards outbound delivery only while connected', async () => {
+    const channel = active()
+    const runtime = new LarkRuntime({
+      settings: () => resolveSettingsConfig({ appId: 'id' }),
+      resolveSecret: async () => 'secret',
+      start: async () => channel,
+    })
+    await expect(runtime.send({ text: 'before' })).rejects.toThrow(/not connected/)
+    await runtime.reconcile()
+    await expect(runtime.send({ text: 'after' })).resolves.toEqual({ messageId: 'out' })
+    expect(channel.send).toHaveBeenCalledWith({ text: 'after' })
   })
 
   it('never exposes the resolved secret in connection errors', async () => {
@@ -89,7 +107,7 @@ describe('LarkRuntime', () => {
     const runtime = new LarkRuntime({
       settings: () => config,
       resolveSecret: async () => 'secret',
-      start: async () => async () => { throw new Error('disconnect failed') },
+      start: async () => active(async () => { throw new Error('disconnect failed') }),
     })
     await runtime.reconcile()
     config = { ...config, requireMention: false }

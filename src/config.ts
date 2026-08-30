@@ -6,6 +6,8 @@ export type DirectMessageMode = 'open' | 'allowlist' | 'disabled'
 export const LARK_APP_SECRET_REF = 'DSH_LARK_APP_SECRET'
 export const LARK_SETTINGS_NAMESPACE = 'lark-channel'
 const DEFAULT_ERROR_MESSAGE = '抱歉，处理这条消息时遇到了问题，请稍后重试。'
+export const DEFAULT_GROUP_BATCH_DELAY_MS = 1500
+export const DEFAULT_SILENT_REPLY_TOKEN = 'NO_REPLY'
 const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u
 
 export interface Config {
@@ -18,6 +20,9 @@ export interface Config {
   dmMode?: DirectMessageMode
   groupAllowlist?: string[]
   dmAllowlist?: string[]
+  homeChatId?: string
+  groupBatchDelayMs?: number
+  silentReplyToken?: string
   provider?: string
   model?: string
   workspace?: string
@@ -27,7 +32,7 @@ export interface Config {
 
 export interface SettingsConfig extends Required<Pick<Config,
   'appId' | 'appSecretRef' | 'domain' | 'requireMention' | 'dmMode' | 'groupAllowlist' |
-  'dmAllowlist' | 'errorMessage'>> {
+  'dmAllowlist' | 'homeChatId' | 'groupBatchDelayMs' | 'silentReplyToken' | 'errorMessage'>> {
   appSecret?: string
   provider?: string
   model?: string
@@ -49,6 +54,9 @@ export const ConfigSchema: z<Config> = z.object({
   dmMode: z.union(['open', 'allowlist', 'disabled']).default('open'),
   groupAllowlist: z.array(z.string()).default([]),
   dmAllowlist: z.array(z.string()).default([]),
+  homeChatId: z.string().default(''),
+  groupBatchDelayMs: z.number().step(1).min(0).max(30_000).default(DEFAULT_GROUP_BATCH_DELAY_MS),
+  silentReplyToken: z.string().default(DEFAULT_SILENT_REPLY_TOKEN),
   provider: z.string(),
   model: z.string(),
   workspace: z.string(),
@@ -61,6 +69,14 @@ export function resolveSettingsConfig(config: Config): SettingsConfig {
   if (!CREDENTIAL_REF_PATTERN.test(appSecretRef)) throw new TypeError('appSecretRef must be a POSIX environment variable name')
   const errorMessage = config.errorMessage ?? DEFAULT_ERROR_MESSAGE
   if (errorMessage.length > 500) throw new TypeError('errorMessage must not exceed 500 characters')
+  const groupBatchDelayMs = config.groupBatchDelayMs ?? DEFAULT_GROUP_BATCH_DELAY_MS
+  if (!Number.isSafeInteger(groupBatchDelayMs) || groupBatchDelayMs < 0 || groupBatchDelayMs > 30_000) {
+    throw new TypeError('groupBatchDelayMs must be an integer between 0 and 30000')
+  }
+  const silentReplyToken = (config.silentReplyToken ?? DEFAULT_SILENT_REPLY_TOKEN).trim()
+  if (silentReplyToken === '' || silentReplyToken.length > 64 || /\s/u.test(silentReplyToken)) {
+    throw new TypeError('silentReplyToken must be 1-64 non-whitespace characters')
+  }
   return {
     appId: config.appId ?? '',
     appSecretRef,
@@ -69,6 +85,9 @@ export function resolveSettingsConfig(config: Config): SettingsConfig {
     dmMode: config.dmMode ?? 'open',
     groupAllowlist: config.groupAllowlist ?? [],
     dmAllowlist: config.dmAllowlist ?? [],
+    homeChatId: config.homeChatId?.trim() ?? '',
+    groupBatchDelayMs,
+    silentReplyToken,
     errorMessage,
     ...(config.appSecret === undefined ? {} : { appSecret: config.appSecret }),
     ...(config.provider === undefined ? {} : { provider: config.provider }),

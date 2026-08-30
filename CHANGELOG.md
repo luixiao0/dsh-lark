@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2-squady.1
+
+- Persist accepted Feishu messages and completed message IDs under `DSH_HOME`
+  so restart recovery does not depend on the SDK's in-memory dedup cache.
+- Batch ordinary group messages by chat or topic while preserving sender,
+  mention, message, and timestamp metadata for the Agent.
+- Flush a pending group batch immediately when the bot is explicitly mentioned.
+- Suppress an exact configurable `NO_REPLY` response for ambient group turns.
+- Keep ambient failures quiet while retaining the safe fallback for direct
+  messages and explicit mentions.
+- Provide an internal `larkDelivery` Service for proactive messages, restricted
+  to `groupAllowlist`; no periodic scheduler is included.
+
 ## 0.2.2
 
 - Restore npm 12 lockfile entries required for clean Linux CI installs.

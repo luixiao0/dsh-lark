@@ -44,7 +44,8 @@ describe('Lark settings client plugin', () => {
       revision: 1,
       settings: {
         appId: 'cli_existing', domain: 'feishu', requireMention: true, dmMode: 'open',
-        groupAllowlist: [], dmAllowlist: [], errorMessage: 'safe error',
+        groupAllowlist: [], dmAllowlist: [], homeChatId: '', groupBatchDelayMs: 1500,
+        silentReplyToken: 'NO_REPLY', errorMessage: 'safe error',
       },
       credential: { configured: true, source: 'file', writable: true },
       runtime: { state: 'connected' },
@@ -89,7 +90,8 @@ describe('LarkSettingsSection', () => {
     revision: 12,
     settings: {
       appId: 'cli_existing', appSecretRef: 'DSH_LARK_APP_SECRET', domain: 'feishu', requireMention: true,
-      dmMode: 'open', groupAllowlist: [], dmAllowlist: [], errorMessage: 'safe error',
+      dmMode: 'open', groupAllowlist: [], dmAllowlist: [], homeChatId: '', groupBatchDelayMs: 1500,
+      silentReplyToken: 'NO_REPLY', errorMessage: 'safe error',
     },
     credential: { configured: true, source: 'file', writable: true },
     runtime: { state: 'connected' },

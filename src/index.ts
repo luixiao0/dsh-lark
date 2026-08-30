@@ -13,14 +13,26 @@ import { ConfigSchema, LARK_SETTINGS_NAMESPACE, resolveSettingsConfig } from './
 import type { Config as PluginConfig, SettingsConfig } from './config.ts'
 import { HarnessConversationService } from './harness.ts'
 import { startChannel } from './channel.ts'
+import type { OutboundMessage } from './channel.ts'
+import { PersistentMessageInbox } from './inbox.ts'
 import { LarkRuntime } from './runtime.ts'
 import { createSettingsApi } from './settings-api.ts'
 import { handleSettingsRequest, SETTINGS_PATH } from './web.ts'
 
+export interface LarkDeliveryService {
+  send(message: OutboundMessage): ReturnType<LarkRuntime['send']>
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    larkDelivery: LarkDeliveryService
+  }
+}
+
 export const name = 'lark-channel'
 export const inject = [
   'agents', 'sessions', 'sessionPersistence', 'agentDefaultModel', 'agentPresets', 'workspaceRegistry',
-  'settings', 'credentials', 'webServer',
+  'settings', 'credentials', 'webServer', 'timer',
 ]
 export const Config = ConfigSchema
 export type { PluginConfig }
@@ -36,7 +48,8 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
   const settings = ctx.get('settings')
   const credentials = ctx.get('credentials')
   const webServer = ctx.get('webServer')
-  if (agents === undefined || sessions === undefined || sessionPersistence === undefined || defaultModel === undefined || agentPresets === undefined || workspaceRegistry === undefined || settings === undefined || credentials === undefined || webServer === undefined) {
+  const timer = ctx.get('timer') as { timeout(callback: () => void, delay: number): () => void } | undefined
+  if (agents === undefined || sessions === undefined || sessionPersistence === undefined || defaultModel === undefined || agentPresets === undefined || workspaceRegistry === undefined || settings === undefined || credentials === undefined || webServer === undefined || timer === undefined) {
     throw new Error('dsh-lark requires Harness agent, settings, credentials, workspace, and webServer services')
   }
 
@@ -61,9 +74,20 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
         agentPresets,
         workspaceRegistry,
       }, config)
-      return startChannel(config, bridge, createLarkChannel, ctx.logger, console)
+      return startChannel(config, bridge, {
+        factory: createLarkChannel,
+        inbox: new PersistentMessageInbox(),
+        scheduler: timer,
+        logger: ctx.logger,
+        terminalLogger: console,
+      })
     },
   })
+
+  const delivery = {
+    send: (message: OutboundMessage) => runtime.send(message),
+  }
+  ctx.provide('larkDelivery', delivery)
 
   const api = createSettingsApi({
     getSettings: currentSettings,

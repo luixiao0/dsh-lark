@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { startChannel } from '../src/channel.ts'
+import type { MessageInbox } from '../src/inbox.ts'
 
 function fakeChannel() {
   const handlers = new Map<string, Function>()
@@ -11,61 +12,149 @@ function fakeChannel() {
   }
 }
 
+function fakeInbox(initial: any[] = []): MessageInbox & { complete: ReturnType<typeof vi.fn> } {
+  const pending = [...initial]
+  const complete = vi.fn(async (ids: readonly string[]) => {
+    for (const id of ids) {
+      const index = pending.findIndex(message => message.messageId === id)
+      if (index >= 0) pending.splice(index, 1)
+    }
+  })
+  return {
+    accept: vi.fn(async message => {
+      if (pending.some(item => item.messageId === message.messageId)) return false
+      pending.push(message)
+      return true
+    }),
+    listPending: vi.fn(async () => [...pending]),
+    complete,
+  }
+}
+
+function scheduler() {
+  return {
+    timeout(callback: () => void, delay: number) {
+      const timer = setTimeout(callback, delay)
+      return () => clearTimeout(timer)
+    },
+  }
+}
+
+function config(overrides: Record<string, unknown> = {}) {
+  return {
+    appId: 'id', appSecret: 'secret', domain: 'feishu' as const, requireMention: true,
+    dmMode: 'open' as const, groupAllowlist: ['oc_1'], dmAllowlist: [], homeChatId: 'oc_1',
+    groupBatchDelayMs: 10, silentReplyToken: 'NO_REPLY', workspace: '/work', errorMessage: 'safe error',
+    ...overrides,
+  }
+}
+
+function message(overrides: Record<string, unknown> = {}) {
+  return {
+    messageId: 'om_1', chatId: 'oc_1', chatType: 'p2p' as const, senderId: 'ou_1', senderName: 'Lux',
+    content: 'hi', rawContentType: 'text', resources: [], mentions: [], mentionAll: false,
+    mentionedBot: false, createTime: Date.now(),
+    ...overrides,
+  }
+}
+
+function dependencies(channel: ReturnType<typeof fakeChannel>, inbox = fakeInbox(), logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }) {
+  return { factory: vi.fn(() => channel as any), inbox, scheduler: scheduler(), logger }
+}
+
 describe('startChannel', () => {
-  it('uses WebSocket policy defaults and replies to the inbound message', async () => {
+  it('uses WebSocket policy defaults and preserves channel metadata for the agent', async () => {
     const channel = fakeChannel()
-    const factory = vi.fn(() => channel as any)
-    const bridge = { reply: vi.fn(async () => 'Hello **Lark**'), dispose: vi.fn(async () => undefined) }
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
-    const stop = await startChannel({
-      appId: 'id', appSecret: 'secret', domain: 'feishu', requireMention: true, dmMode: 'open',
-      groupAllowlist: [], dmAllowlist: [], workspace: '/work', errorMessage: 'safe error',
-    }, bridge, factory, logger)
-    expect(logger.info).toHaveBeenCalledWith('dsh-lark: WebSocket connected')
-    expect(factory).toHaveBeenCalledWith(expect.objectContaining({ transport: 'websocket', policy: expect.objectContaining({ requireMention: true, dmMode: 'open' }) }))
-    await channel.handlers.get('message')!({ messageId: 'om_1', chatId: 'oc_1', chatType: 'p2p', content: 'hi' })
-    expect(bridge.reply).toHaveBeenCalledWith(expect.objectContaining({ content: 'hi' }))
+    const deps = dependencies(channel)
+    const bridge = { reply: vi.fn(async (_message: any) => 'Hello **Lark**'), dispose: vi.fn(async () => undefined) }
+    const active = await startChannel(config(), bridge, deps)
+    expect(deps.logger.info).toHaveBeenCalledWith('dsh-lark: WebSocket connected')
+    expect(deps.factory).toHaveBeenCalledWith(expect.objectContaining({
+      transport: 'websocket',
+      policy: expect.objectContaining({ requireMention: true, dmMode: 'open' }),
+      safety: expect.objectContaining({ batch: { text: { delayMs: 0 } } }),
+    }))
+    await channel.handlers.get('message')!(message())
+    await vi.waitFor(() => expect(bridge.reply).toHaveBeenCalledOnce())
+    const inbound = bridge.reply.mock.calls[0]![0]
+    expect(inbound.content).toContain('<feishu_messages')
+    expect(inbound.content).toContain('"senderName":"Lux"')
     expect(channel.send).toHaveBeenCalledWith('oc_1', { markdown: 'Hello **Lark**' }, { replyTo: 'om_1', replyInThread: false })
-    await stop()
+    await active.stop()
     expect(channel.disconnect).toHaveBeenCalledOnce()
     expect(bridge.dispose).toHaveBeenCalledOnce()
-    expect(logger.info).toHaveBeenCalledWith('dsh-lark: WebSocket disconnected')
   })
 
-  it('sends a safe fallback when the Harness turn fails', async () => {
+  it('batches ordinary group messages per topic and suppresses an exact ambient token', async () => {
+    vi.useFakeTimers()
     const channel = fakeChannel()
-    const bridge = { reply: vi.fn(async () => { throw new Error('secret stack') }), dispose: vi.fn(async () => undefined) }
+    const inbox = fakeInbox()
+    const bridge = { reply: vi.fn(async (_message: any) => 'NO_REPLY'), dispose: vi.fn(async () => undefined) }
+    const active = await startChannel(config({ requireMention: false, groupBatchDelayMs: 100 }), bridge, dependencies(channel, inbox))
+    await channel.handlers.get('message')!(message({ messageId: 'om_a', chatType: 'group', threadId: 'topic-a', senderId: 'ou_a', senderName: 'A', content: 'one' }))
+    await channel.handlers.get('message')!(message({ messageId: 'om_b', chatType: 'group', threadId: 'topic-b', senderId: 'ou_b', senderName: 'B', content: 'two' }))
+    await vi.advanceTimersByTimeAsync(100)
+    await vi.runAllTicks()
+    expect(bridge.reply).toHaveBeenCalledTimes(2)
+    expect(bridge.reply.mock.calls.map(call => call[0].threadId).sort()).toEqual(['topic-a', 'topic-b'])
+    expect(channel.send).not.toHaveBeenCalled()
+    expect(inbox.complete).toHaveBeenCalledTimes(2)
+    await active.stop()
+    vi.useRealTimers()
+  })
+
+  it('flushes buffered context immediately when the bot is mentioned', async () => {
+    const channel = fakeChannel()
+    const bridge = { reply: vi.fn(async (_message: any) => 'answer'), dispose: vi.fn(async () => undefined) }
+    await startChannel(config({ requireMention: false, groupBatchDelayMs: 1000 }), bridge, dependencies(channel))
+    await channel.handlers.get('message')!(message({ messageId: 'om_a', chatType: 'group', content: 'background' }))
+    await channel.handlers.get('message')!(message({ messageId: 'om_b', chatType: 'group', content: 'question', mentionedBot: true }))
+    await vi.waitFor(() => expect(bridge.reply).toHaveBeenCalledOnce())
+    expect(bridge.reply.mock.calls[0]![0].content).toContain('background')
+    expect(bridge.reply.mock.calls[0]![0].content).toContain('question')
+  })
+
+  it('sends a safe fallback for direct requests but stays quiet for ambient failures', async () => {
+    const channel = fakeChannel()
     const terminal = { error: vi.fn() }
-    await startChannel({ appId: 'id', appSecret: 'secret', domain: 'lark', requireMention: true, dmMode: 'open', groupAllowlist: [], dmAllowlist: [], workspace: '/work', errorMessage: 'safe error' }, bridge, () => channel as any, { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, terminal)
-    await channel.handlers.get('message')!({ messageId: 'om_1', chatId: 'oc_1', chatType: 'group', threadId: 'omt_1', content: 'hi' })
+    const deps = { ...dependencies(channel), terminalLogger: terminal }
+    const bridge = { reply: vi.fn(async (_message: any) => { throw new Error('secret stack') }), dispose: vi.fn(async () => undefined) }
+    await startChannel(config({ requireMention: false, groupBatchDelayMs: 0 }), bridge, deps)
+    await channel.handlers.get('message')!(message({ messageId: 'direct', chatType: 'group', threadId: 'topic', mentionedBot: true }))
+    await vi.waitFor(() => expect(channel.send).toHaveBeenCalledWith('oc_1', { text: 'safe error' }, { replyTo: 'direct', replyInThread: true }))
+    channel.send.mockClear()
+    await channel.handlers.get('message')!(message({ messageId: 'ambient', chatType: 'group', mentionedBot: false }))
+    await vi.waitFor(() => expect(bridge.reply).toHaveBeenCalledTimes(2))
+    expect(channel.send).not.toHaveBeenCalled()
     expect(terminal.error).toHaveBeenCalledWith('dsh-lark: message handling failed: secret stack')
-    expect(channel.send).toHaveBeenCalledWith('oc_1', { text: 'safe error' }, { replyTo: 'om_1', replyInThread: true })
+  })
+
+  it('restricts proactive delivery to the configured group allowlist', async () => {
+    const channel = fakeChannel()
+    const bridge = { reply: vi.fn(async (_message: any) => 'answer'), dispose: vi.fn(async () => undefined) }
+    const active = await startChannel(config(), bridge, dependencies(channel))
+    await expect(active.send({ markdown: 'summary' })).resolves.toEqual({ messageId: 'out' })
+    expect(channel.send).toHaveBeenCalledWith('oc_1', { markdown: 'summary' })
+    await expect(active.send({ chatId: 'oc_other', text: 'blocked' })).rejects.toThrow(/groupAllowlist/)
+    await expect(active.send({ text: 'a', markdown: 'b' })).rejects.toThrow(/exactly one/)
   })
 
   it('disposes conversation resources when channel disconnect fails', async () => {
     const channel = fakeChannel()
     channel.disconnect.mockRejectedValueOnce(new Error('disconnect failed'))
-    const bridge = { reply: vi.fn(async () => ''), dispose: vi.fn(async () => undefined) }
-    const stop = await startChannel({
-      appId: 'id', appSecret: 'secret', domain: 'lark', requireMention: true, dmMode: 'open',
-      groupAllowlist: [], dmAllowlist: [], workspace: '/work', errorMessage: 'safe error',
-    }, bridge, () => channel as any, { info: vi.fn(), warn: vi.fn(), error: vi.fn() })
-    await expect(stop()).rejects.toThrow('disconnect failed')
+    const bridge = { reply: vi.fn(async (_message: any) => ''), dispose: vi.fn(async () => undefined) }
+    const active = await startChannel(config(), bridge, dependencies(channel))
+    await expect(active.stop()).rejects.toThrow('disconnect failed')
     expect(bridge.dispose).toHaveBeenCalledOnce()
   })
 
-  it('logs an initial connection failure to the Harness logger and terminal without exposing the secret', async () => {
+  it('logs an initial connection failure without exposing the secret', async () => {
     const channel = fakeChannel()
     channel.connect.mockRejectedValueOnce(new Error('authentication failed for secret'))
-    const bridge = { reply: vi.fn(async () => ''), dispose: vi.fn(async () => undefined) }
+    const bridge = { reply: vi.fn(async (_message: any) => ''), dispose: vi.fn(async () => undefined) }
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
     const terminal = { error: vi.fn() }
-
-    await expect(startChannel({
-      appId: 'id', appSecret: 'secret', domain: 'lark', requireMention: true, dmMode: 'open',
-      groupAllowlist: [], dmAllowlist: [], workspace: '/work', errorMessage: 'safe error',
-    }, bridge, () => channel as any, logger, terminal)).rejects.toThrow('authentication failed for secret')
-
+    await expect(startChannel(config(), bridge, { ...dependencies(channel, fakeInbox(), logger), terminalLogger: terminal })).rejects.toThrow('authentication failed for secret')
     expect(logger.error).toHaveBeenCalledWith('dsh-lark: WebSocket connection failed: authentication failed for [redacted]')
     expect(terminal.error).toHaveBeenCalledWith('dsh-lark: WebSocket connection failed: authentication failed for [redacted]')
     expect(bridge.dispose).toHaveBeenCalledOnce()

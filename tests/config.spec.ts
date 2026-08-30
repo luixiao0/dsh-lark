@@ -5,6 +5,7 @@ describe('resolveSettingsConfig', () => {
   it('allows an installed plugin to remain unconfigured', () => {
     expect(resolveSettingsConfig({})).toMatchObject({
       appId: '', appSecretRef: LARK_APP_SECRET_REF, domain: 'feishu', requireMention: true, dmMode: 'open',
+      homeChatId: '', groupBatchDelayMs: 1500, silentReplyToken: 'NO_REPLY',
     })
   })
 
@@ -20,8 +21,9 @@ describe('resolveSettingsConfig', () => {
     expect(resolveSettingsConfig({
       appId: 'id', domain: 'lark', requireMention: false,
       dmMode: 'allowlist', groupAllowlist: ['oc_a'], dmAllowlist: ['ou_a'],
+      homeChatId: 'oc_a', groupBatchDelayMs: 800, silentReplyToken: 'QUIET',
       provider: 'deepseek-official', model: 'deepseek-v4-flash', workspace: '/work', agentPreset: 'coding',
-    })).toMatchObject({ domain: 'lark', dmMode: 'allowlist', groupAllowlist: ['oc_a'], dmAllowlist: ['ou_a'], workspace: '/work', agentPreset: 'coding' })
+    })).toMatchObject({ domain: 'lark', dmMode: 'allowlist', groupAllowlist: ['oc_a'], dmAllowlist: ['ou_a'], homeChatId: 'oc_a', groupBatchDelayMs: 800, silentReplyToken: 'QUIET', workspace: '/work', agentPreset: 'coding' })
   })
 
   it('requires a POSIX credential reference', () => {
@@ -30,6 +32,12 @@ describe('resolveSettingsConfig', () => {
 
   it('rejects an unbounded error response', () => {
     expect(() => resolveSettingsConfig({ appId: 'id', errorMessage: 'x'.repeat(501) })).toThrow(/errorMessage/)
+  })
+
+  it('rejects invalid ambient policy values', () => {
+    expect(() => resolveSettingsConfig({ groupBatchDelayMs: -1 })).toThrow(/groupBatchDelayMs/)
+    expect(() => resolveSettingsConfig({ groupBatchDelayMs: 1.5 })).toThrow(/groupBatchDelayMs/)
+    expect(() => resolveSettingsConfig({ silentReplyToken: 'NO REPLY' })).toThrow(/silentReplyToken/)
   })
 })
 

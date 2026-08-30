@@ -13,6 +13,11 @@
 - 回复会关联原始消息，并保留在原来的话题线程中。
 - 群聊默认需要 @机器人，单聊默认开放。
 - 可以通过白名单限制群聊和单聊用户。
+- 普通群消息按群或话题短时聚合，明确 @机器人时立即处理。
+- Agent 会收到发送者、@状态、消息 ID 和时间信息，不会混淆不同话题。
+- 旁听场景可用精确 `NO_REPLY` 标记保持静默。
+- 收件箱和完成去重状态持久化到 `$DSH_HOME/state/dsh-lark/`。
+- 向其他 Harness 插件提供受群白名单限制的 `larkDelivery` 主动发送 Service。
 - 可以沿用 Harness 默认模型，也可以为飞书渠道指定模型。
 - 会话标识经过 SHA-256 处理，不会把原始 `chat_id` 写进 Session ID。
 - Harness 内部错误不会直接发送给飞书用户。
@@ -235,6 +240,9 @@ Harness 重启后，插件会恢复对应的持久化 Session；如果该 Sessio
       - oc_xxxxxxxxxxxxxxxx
     dmAllowlist:
       - ou_xxxxxxxxxxxxxxxx
+    homeChatId: oc_xxxxxxxxxxxxxxxx
+    groupBatchDelayMs: 1500
+    silentReplyToken: NO_REPLY
     provider: deepseek-official
     model: deepseek-v4-flash
     workspace: /absolute/path/to/workspace
@@ -251,6 +259,9 @@ Harness 重启后，插件会恢复对应的持久化 Session；如果该 Sessio
 | `dmMode` | 否 | `open` | 单聊策略：`open`、`allowlist` 或 `disabled` |
 | `groupAllowlist` | 否 | `[]` | 允许使用机器人的群 `chat_id` 列表；空数组表示不限制 |
 | `dmAllowlist` | 否 | `[]` | `dmMode: allowlist` 时允许访问的用户 `open_id` 列表 |
+| `homeChatId` | 否 | 空字符串 | `larkDelivery` 未指定目标时使用的群；仍必须位于 `groupAllowlist` |
+| `groupBatchDelayMs` | 否 | `1500` | 普通群消息按群或话题聚合的等待时间；单聊和明确 @ 不等待 |
+| `silentReplyToken` | 否 | `NO_REPLY` | 普通群旁听 turn 精确输出该值时不发送飞书消息 |
 | `provider` | 否 | Harness 默认值 | 为这个渠道指定模型 Provider |
 | `model` | 否 | Harness 默认值 | 为这个渠道指定模型 |
 | `workspace` | 否 | 第一个已注册 Workspace；没有时为 DSH 进程工作目录 | Agent 使用的工作目录；显式路径优先 |
@@ -310,12 +321,18 @@ dmMode: disabled
 
 - 普通单聊和群聊使用聊天级 Session。
 - 话题消息使用线程级 Session。
+- SDK 自带的聊天级聚合被关闭，避免不同话题串线；插件按 Session 会话键聚合。
+- 聚合消息会保留每条消息的发送者、@状态、消息 ID 和时间戳。
+- 单聊和明确 @机器人立即处理；普通群消息等待 `groupBatchDelayMs`。
+- 普通群旁听 turn 精确输出 `silentReplyToken` 时保持静默。
 - Session 会挂载所选 Agent Preset，并在能匹配注册 Workspace 时关联到该 Workspace。
 - 飞书 SDK 会对同一聊天中的事件串行处理，避免两个 Agent turn 同时修改同一会话。
 - 重复事件会在 SDK 的去重窗口内被忽略。
 - 超过五分钟的延迟事件不会当作新消息处理。
 - 每次 Agent turn 结束后，插件会要求 Harness 刷新 Session 存储。
 - 回复只读取当前消息之后产生的 assistant 文本，不会误发上一轮回答。
+- 未完成消息和十二小时内的完成 ID 存放在 `$DSH_HOME/state/dsh-lark/inbox.json`，文件权限为 `0600`。
+- 插件不包含 cron 或定时复盘；主动消息由其他 Harness 插件通过 `larkDelivery` 触发。
 
 ## 安全说明
 
@@ -323,6 +340,7 @@ dmMode: disabled
 - `$DSH_HOME/.credentials.yaml` 是权限为 `0600` 的明文 YAML，不是加密保险库；同一 OS 用户运行的进程仍可读取。
 - 插件不会记录 App ID 和 App Secret。
 - Agent 的异常堆栈不会发送给飞书用户。
+- 普通群旁听 turn 失败时只记录日志，不在群里发送失败提示。
 - 用户只能看到 `errorMessage` 中配置的失败提示。
 - Session ID 不包含原始飞书 `chat_id` 或 `thread_id`。
 - 一个飞书应用不宜同时运行多个长连接消费者。平台可能在连接之间分发事件，导致单个实例只能收到部分消息。
@@ -355,7 +373,7 @@ dmMode: disabled
 
 ### 群聊中不 @机器人也希望触发
 
-把 `requireMention` 改成 `false`，并为应用申请接收群内全部消息的权限。这个权限通常需要管理员审批，开启前应同步评估群消息的隐私范围和模型调用成本。
+把 `requireMention` 改成 `false`，并为应用申请接收群内全部消息的权限。普通消息会按话题聚合后进入 Agent；Agent Preset 应规定只有高价值介入才回复，否则精确输出 `silentReplyToken`。这个权限通常需要管理员审批，开启前应同步评估群消息的隐私范围和模型调用成本。
 
 ### 长连接反复重连
 

@@ -1,5 +1,7 @@
 import { resolveRuntimeConfig } from './config.ts'
 import type { RuntimeConfig, SettingsConfig } from './config.ts'
+import type { ActiveLarkChannel, OutboundMessage } from './channel.ts'
+import type { SendResult } from '@larksuiteoapi/node-sdk'
 
 export type RuntimeStatus =
   | { state: 'unconfigured'; message: string }
@@ -11,11 +13,11 @@ export type RuntimeStatus =
 export interface LarkRuntimeDependencies {
   settings(): SettingsConfig
   resolveSecret(ref: string): Promise<string | undefined>
-  start(config: RuntimeConfig): Promise<() => Promise<void>>
+  start(config: RuntimeConfig): Promise<ActiveLarkChannel>
 }
 
 export class LarkRuntime {
-  private current: { fingerprint: string; stop: () => Promise<void> } | undefined
+  private current: { fingerprint: string; channel: ActiveLarkChannel } | undefined
   private snapshot: RuntimeStatus = { state: 'unconfigured', message: 'App ID and App Secret are required' }
   private operations = Promise.resolve()
   private disposed = false
@@ -45,12 +47,12 @@ export class LarkRuntime {
         if (this.current?.fingerprint === fingerprint) return
         await this.stopCurrent()
         this.snapshot = { state: 'connecting' }
-        const stop = await this.deps.start(config)
+        const channel = await this.deps.start(config)
         if (this.disposed) {
-          await stop()
+          await channel.stop()
           return
         }
-        this.current = { fingerprint, stop }
+        this.current = { fingerprint, channel }
         this.snapshot = { state: 'connected' }
       } catch (error) {
         let failure = error
@@ -79,6 +81,12 @@ export class LarkRuntime {
     })
   }
 
+  async send(message: OutboundMessage): Promise<SendResult> {
+    const current = this.current
+    if (current === undefined || this.snapshot.state !== 'connected') throw new Error('dsh-lark channel is not connected')
+    return current.channel.send(message)
+  }
+
   private enqueue(operation: () => Promise<void>): Promise<void> {
     const result = this.operations.then(operation, operation)
     this.operations = result.catch(() => undefined)
@@ -88,6 +96,6 @@ export class LarkRuntime {
   private async stopCurrent(): Promise<void> {
     const current = this.current
     this.current = undefined
-    if (current !== undefined) await current.stop()
+    if (current !== undefined) await current.channel.stop()
   }
 }
