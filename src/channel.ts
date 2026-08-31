@@ -143,7 +143,7 @@ export interface StartChannelDependencies {
   scheduler: TimerScheduler
   factory?: ChannelFactory
   logger?: PluginLogger
-  terminalLogger?: Pick<PluginLogger, 'error'>
+  terminalLogger?: Pick<PluginLogger, 'info' | 'warn' | 'error'>
   bindings?: ReplyBindingStore
   messageSync?: MessageSyncState
 }
@@ -705,6 +705,7 @@ export async function startChannel(
     accept: message => dependencies.inbox.accept(message),
     deliver: message => batcher.push(message),
     logger,
+    ...(dependencies.terminalLogger === undefined ? {} : { terminalLogger: dependencies.terminalLogger }),
   })
   hulyEvents?.start()
   for (const message of recovered) batcher.push(message)

@@ -71,6 +71,10 @@ copy it into that workspace.
 - `larkDelivery` may send to any `open_id`; a non-empty `groupAllowlist` still
   constrains explicit group targets for deployments that choose one.
 - Do not add cron or periodic monitoring. Proactive delivery is event-driven.
+- Treat another Feishu app bot as a display sink, not an event source: Feishu
+  does not reliably emit bot-to-bot message events. Integrate the producing
+  service through the authenticated event bridge/webhook instead of polling
+  chat history for live notifications; history remains reconnect recovery.
 - Keep credentials outside Git and resolve them through Harness Credentials.
 - Feishu-hosted agents must not mount Harness interactive question tools unless
   the channel implements their answer lifecycle. Ask through ordinary final

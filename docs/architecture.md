@@ -40,4 +40,11 @@ The plugin provides `larkDelivery` only inside the Cordis Host. User `open_id` t
 
 The Agent can page through currently visible chat history, re-read one message with current `updated`/`deleted` state and locally downloaded resources, and edit or recall messages through explicit tools. Feishu emits `im.message.recalled_v1`, which is delivered as a system entry to the same conversation. Feishu exposes no corresponding message-edited event, so edited content is observed only through a fresh message/history read. App-bot cards are readable through these explicit APIs even when their original event was not delivered.
 
+Another Feishu app bot is not a reliable live event source: Feishu may retain
+its card in history without delivering a bot-to-bot incoming-message event.
+Notification producers that require real-time Agent handling must publish to
+the authenticated event bridge (or an equivalent source webhook). Periodic
+chat polling is intentionally not part of the runtime; history listing remains
+bounded reconnect recovery and an explicit Agent tool.
+
 Long-running work stays outside the chat's coordinator Session by using DSH's existing continuable subagent. For explicit mentions and direct messages, common operational verbs such as repair, install, deploy, configure, migrate, implement, investigate, and research trigger bridge-level delegation before the parent model runs. The parent receives a durable injected status record and immediately acknowledges, while ordinary questions and ambient group context remain on the parent. The child reports start, progress, blockers, and the final result through `feishu_send_message` with the exact inbound `chat_id`; if it fails to send a marked final update, the bridge delivers its assistant result. Its first prompt line carries a mechanical `DSH_FEISHU_BACKGROUND:` routing marker. After a process restart, the channel inspects subagent sessions and resumes only a child whose latest turn ended as `interrupted`; the resumed child is told to verify external state before repeating side effects, and the channel delivers the final result to the marked chat. The completed recovery turn prevents a second resume. This keeps new messages in the same group serviceable while the child continues independently.

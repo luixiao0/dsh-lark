@@ -149,6 +149,7 @@ export interface HulyEventClientOptions {
   accept(message: NormalizedMessage): Promise<boolean>
   deliver(message: NormalizedMessage): void
   logger: PluginLogger
+  terminalLogger?: Pick<PluginLogger, 'info' | 'warn' | 'error'>
 }
 
 export class HulyEventClient {
@@ -157,6 +158,7 @@ export class HulyEventClient {
   private attempts = 0
   private stopped = false
   private operations = Promise.resolve()
+  private authTimer: NodeJS.Timeout | undefined
 
   constructor(private readonly options: HulyEventClientOptions) {}
 
@@ -168,6 +170,7 @@ export class HulyEventClient {
   stop(): void {
     this.stopped = true
     if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer)
+    if (this.authTimer !== undefined) clearTimeout(this.authTimer)
     this.socket?.close()
     this.socket = undefined
   }
@@ -179,7 +182,7 @@ export class HulyEventClient {
     socket.addEventListener('open', () => {
       this.attempts = 0
       socket.send(JSON.stringify({ type: 'auth', secret: this.options.secret }))
-      this.options.logger.info('dsh-lark: Huly event bridge connected')
+      this.authTimer = setTimeout(() => socket.close(1008, 'Authentication timeout'), 10_000)
     })
     socket.addEventListener('message', event => {
       const next = this.operations.then(
@@ -191,15 +194,24 @@ export class HulyEventClient {
         socket.close(1011, 'Event persistence failed')
       })
     })
-    socket.addEventListener('error', () => this.options.logger.error('dsh-lark: Huly event bridge error'))
-    socket.addEventListener('close', () => {
+    socket.addEventListener('error', () => this.log('error', 'dsh-lark: Huly event bridge error'))
+    socket.addEventListener('close', event => {
+      if (this.authTimer !== undefined) clearTimeout(this.authTimer)
+      this.authTimer = undefined
       if (this.socket === socket) this.socket = undefined
+      if (!this.stopped) this.log('warn', `dsh-lark: Huly event bridge closed (${event.code}${event.reason === '' ? '' : `: ${event.reason}`})`)
       if (!this.stopped) this.scheduleReconnect()
     })
   }
 
   private async handleMessage(socket: WebSocket, payload: string): Promise<void> {
     const frame = JSON.parse(payload) as { type?: string; event?: HulyFeishuEvent }
+    if (frame.type === 'ready') {
+      if (this.authTimer !== undefined) clearTimeout(this.authTimer)
+      this.authTimer = undefined
+      this.log('info', 'dsh-lark: Huly event bridge ready')
+      return
+    }
     if (frame.type !== 'event' || frame.event === undefined) return
     const event = frame.event
     const mapping = await this.options.identityMap.resolve(event)
@@ -213,7 +225,13 @@ export class HulyEventClient {
 
   private scheduleReconnect(): void {
     const delay = Math.min(30_000, 500 * (2 ** this.attempts++))
+    this.log('warn', `dsh-lark: Huly event bridge reconnecting in ${delay}ms`)
     this.reconnectTimer = setTimeout(() => this.connect(), delay)
+  }
+
+  private log(level: 'info' | 'warn' | 'error', message: string): void {
+    this.options.logger[level](message)
+    this.options.terminalLogger?.[level](message)
   }
 }
 
