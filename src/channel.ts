@@ -1,7 +1,7 @@
 import { Domain, LoggerLevel, createLarkChannel, normalize } from '@larksuiteoapi/node-sdk'
 import type { LarkChannel, LarkChannelOptions, NormalizedMessage, RawMessageEvent, SendResult } from '@larksuiteoapi/node-sdk'
 import type { RuntimeConfig } from './config.ts'
-import type { HarnessConversationService } from './harness.ts'
+import type { BackgroundWorkDelivery, HarnessConversationService } from './harness.ts'
 import type { MessageInbox } from './inbox.ts'
 import { ConversationMessageBatcher, formatLocalTime, isAmbientGroupBatch, toAgentMessage } from './message-batcher.ts'
 import type { ContextualNormalizedMessage, QuotedFeishuMessage, TimerScheduler } from './message-batcher.ts'
@@ -150,7 +150,7 @@ export interface StartChannelDependencies {
 
 export async function startChannel(
   config: Omit<RuntimeConfig, 'appSecretRef'>,
-  bridge: Pick<HarnessConversationService, 'reply' | 'dispose'> & Partial<Pick<HarnessConversationService, 'recoverInterruptedBackgroundWork'>>,
+  bridge: Pick<HarnessConversationService, 'reply' | 'dispose'> & Partial<Pick<HarnessConversationService, 'configureBackgroundDelivery' | 'recoverInterruptedBackgroundWork'>>,
   dependencies: StartChannelDependencies,
 ): Promise<ActiveLarkChannel> {
   const factory = dependencies.factory ?? createLarkChannel
@@ -180,6 +180,9 @@ export async function startChannel(
       staleMessageWindowMs: 5 * 60_000,
       dedup: { ttl: 10 * 60_000, maxEntries: 10_000 },
     },
+  })
+  const downloadResources = (message: NormalizedMessage): Promise<NormalizedMessage> => downloadMessageResources(channel, message, (resource, error) => {
+    logger.warn(`dsh-lark: ${resource.type} download failed for ${message.messageId}; continuing without local bytes: ${error instanceof Error ? error.message : String(error)}`)
   })
   const bindings = dependencies.bindings ?? new ReplyBindingStore()
   const messageSync = dependencies.messageSync ?? new PersistentMessageSyncState()
@@ -246,6 +249,17 @@ export async function startChannel(
     const mentions = [...(options?.mentions ?? []), ...resolved.mentions]
     return channel.send(chatId, resolvedContent, mentions.length === 0 ? options : { ...options, mentions })
   }
+
+  const deliverBackground = async (result: BackgroundWorkDelivery): Promise<void> => {
+    const mention = result.chatType === 'group' && result.requesterName?.trim()
+      ? `@${result.requesterName.trim()} `
+      : ''
+    await sendMessage(result.chatId, { markdown: `${mention}${result.text}` }, result.messageId === undefined ? undefined : {
+      replyTo: result.messageId,
+      replyInThread: result.threadId !== undefined,
+    }, result.chatType === 'group')
+  }
+  bridge.configureBackgroundDelivery?.(deliverBackground)
 
   const enrichSenderName = async (message: NormalizedMessage): Promise<NormalizedMessage> => {
     if (message.senderName?.trim()) {
@@ -407,7 +421,7 @@ export async function startChannel(
   const acceptFeishuMessage = async (message: NormalizedMessage) => {
     const card = await enrichLiveCard(message)
     const named = await enrichSenderName(card)
-    const durable = await downloadMessageResources(channel, named)
+    const durable = await downloadResources(named)
     const contextual = await hydrateReplyContext(durable)
     const accepted = await dependencies.inbox.accept(contextual)
     try {
@@ -480,7 +494,7 @@ export async function startChannel(
     if (raw === undefined || channel.botIdentity === undefined) return undefined
     let normalized = applyHistoricalContent(await normalize(raw, { botIdentity: channel.botIdentity }), item)
     normalized = await enrichSenderName(normalized)
-    return download ? downloadMessageResources(channel, normalized) : normalized
+    return download ? downloadResources(normalized) : normalized
   }
 
   async function hydrateReplyContext(message: NormalizedMessage): Promise<NormalizedMessage> {
@@ -679,15 +693,7 @@ export async function startChannel(
     throw error
   }
   logger.info('dsh-lark: WebSocket connected')
-  void bridge.recoverInterruptedBackgroundWork?.(async result => {
-    const mention = result.chatType === 'group' && result.requesterName?.trim()
-      ? `@${result.requesterName.trim()} `
-      : ''
-    await sendMessage(result.chatId, { markdown: `${mention}${result.text}` }, result.messageId === undefined ? undefined : {
-      replyTo: result.messageId,
-      replyInThread: result.threadId !== undefined,
-    }, result.chatType === 'group')
-  }).catch(error => {
+  void bridge.recoverInterruptedBackgroundWork?.(deliverBackground).catch(error => {
     logger.warn(`dsh-lark: interrupted background recovery failed: ${error instanceof Error ? error.message : String(error)}`)
   })
   const hulyEvents = config.hulyEventsUrl === '' ? undefined : new HulyEventClient({

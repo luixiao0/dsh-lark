@@ -5,19 +5,46 @@ import type { LarkChannel, NormalizedMessage, ResourceDescriptor } from '@larksu
 
 export interface LocalResource extends ResourceDescriptor { localPath?: string }
 
-export async function downloadMessageResources(channel: LarkChannel, message: NormalizedMessage): Promise<NormalizedMessage> {
+export async function downloadMessageResources(
+  channel: LarkChannel,
+  message: NormalizedMessage,
+  onError?: (resource: ResourceDescriptor, error: unknown) => void,
+): Promise<NormalizedMessage> {
   if (message.resources.length === 0) return message
   const directory = join(stateRoot(), 'attachments', safeName(message.messageId))
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const resources: LocalResource[] = []
   for (const [index, resource] of message.resources.entries()) {
-    const data = await channel.downloadResource(resource.fileKey, resource.type === 'image' ? 'image' : 'file')
-    const name = safeName(resource.fileName || `${resource.type}-${index + 1}${defaultExtension(resource.type)}`)
-    const localPath = join(directory, name)
-    await writeFile(localPath, data, { mode: 0o600 })
-    resources.push({ ...resource, localPath })
+    try {
+      const data = await downloadResource(channel, message.messageId, resource)
+      const name = safeName(resource.fileName || `${resource.type}-${index + 1}${defaultExtension(resource.type)}`)
+      const localPath = join(directory, name)
+      await writeFile(localPath, data, { mode: 0o600 })
+      resources.push({ ...resource, localPath })
+    } catch (error) {
+      onError?.(resource, error)
+      resources.push(resource)
+    }
   }
   return { ...message, resources } as NormalizedMessage
+}
+
+async function downloadResource(channel: LarkChannel, messageId: string, resource: ResourceDescriptor): Promise<Buffer> {
+  try {
+    const response = await channel.rawClient.im.v1.messageResource.get({
+      path: { message_id: messageId, file_key: resource.fileKey },
+      params: { type: resource.type === 'image' ? 'image' : 'file' },
+    })
+    const chunks: Buffer[] = []
+    for await (const chunk of response.getReadableStream()) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    }
+    return Buffer.concat(chunks)
+  } catch {
+    // Card-hosted images are unsupported by messageResource, so keep the SDK
+    // endpoint as a compatibility fallback for those resources.
+    return channel.downloadResource(resource.fileKey, resource.type === 'image' ? 'image' : 'file')
+  }
 }
 
 export function extractFileDeliveries(text: string): { text: string; files: string[] } {

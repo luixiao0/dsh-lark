@@ -2,7 +2,9 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { AttachmentStore, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
+import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { LocalResource } from './attachments.ts'
 import { conversationKey, summarizeTurn, toSessionId } from './conversation.ts'
@@ -13,7 +15,10 @@ interface AgentLike {
   session: { id: unknown; seq: number; events: readonly any[] }
   whenIdle(): Promise<void>
   followup(message: ReturnType<typeof createUserMessage>): void
+  inject?(message: ReturnType<typeof createUserMessage>): void
 }
+
+const OPERATIONAL_TASK_PATTERN = /(?:修复|修一下|安装|部署|发布|配置|迁移|实现|开发|接入|排查|调查|调研|分析一下|检查一下|改一下|改代码|改配置|清理|同步|导入|导出|升级|更新|重启|提交|推送|创建|删除|批量|fix|install|deploy|configure|migrate|implement|investigate|research|debug)/iu
 
 interface AgentHandleLike { agent: AgentLike; dispose(): Promise<void> }
 
@@ -56,6 +61,11 @@ export interface HarnessBridgeConfig {
 export interface InboundMessage extends ConversationMessage {
   content: string
   resources?: readonly LocalResource[]
+  messageId?: string
+  senderName?: string
+  mentionedBot?: boolean
+  rawContentType?: string
+  sourceText?: string
 }
 
 export interface BackgroundWorkDelivery {
@@ -79,10 +89,18 @@ interface BackgroundWorkOrigin {
 export class HarnessConversationService {
   private readonly handles = new Map<string, Promise<AgentHandleLike>>()
   private readonly recoveryHandles = new Set<AgentHandleLike>()
+  private readonly backgroundHandles = new Set<AgentHandleLike>()
+  private backgroundDelivery: ((result: BackgroundWorkDelivery) => Promise<void>) | undefined
 
   constructor(private readonly deps: HarnessDependencies, private readonly config: HarnessBridgeConfig) {}
 
+  configureBackgroundDelivery(deliver: (result: BackgroundWorkDelivery) => Promise<void>): void {
+    this.backgroundDelivery = deliver
+  }
+
   async reply(message: InboundMessage): Promise<string> {
+    const delegated = await this.delegateOperationalTask(message)
+    if (delegated !== undefined) return delegated
     const key = conversationKey(message)
     const handle = await this.getOrCreate(key)
     const agent = handle.agent
@@ -140,12 +158,121 @@ export class HarnessConversationService {
 
   async dispose(): Promise<void> {
     const handles = await Promise.allSettled(this.handles.values())
+    const backgroundHandles = [...this.backgroundHandles]
+    this.backgroundHandles.clear()
     await Promise.all([
       ...handles.flatMap(result => result.status === 'fulfilled' ? [result.value.dispose()] : []),
       ...[...this.recoveryHandles].map(handle => handle.dispose()),
+      ...backgroundHandles.map(handle => handle.dispose()),
     ])
     this.handles.clear()
     this.recoveryHandles.clear()
+    this.backgroundDelivery = undefined
+  }
+
+  private async delegateOperationalTask(message: InboundMessage): Promise<string | undefined> {
+    const deliver = this.backgroundDelivery
+    if (deliver === undefined || !shouldDelegateOperationalTask(message)) return undefined
+    const parent = await this.getOrCreate(conversationKey(message))
+    let handle: AgentHandleLike
+    try {
+      handle = await this.createMechanicalBackgroundAgent(parent.agent)
+    } catch (error) {
+      console.error(`dsh-lark: mechanical background delegation failed; using parent session: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
+    const origin: BackgroundWorkOrigin = {
+      chatId: message.chatId,
+      chatType: message.chatType,
+      ...(message.messageId === undefined ? {} : { messageId: message.messageId }),
+      ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
+      ...(message.senderName?.trim() ? { requesterName: message.senderName.trim() } : {}),
+      ...(message.senderId === undefined ? {} : { requesterId: message.senderId }),
+    }
+    const marker = `DSH_FEISHU_BACKGROUND:${JSON.stringify(origin)}`
+    const firstSeq = handle.agent.session.seq
+    parent.agent.inject?.(createUserMessage({
+      content: [{ type: 'text', text: `系统状态：消息 ${message.messageId ?? '(unknown)'} 已机械委派给后台 Agent；主 Session 不要重复执行。` }],
+      source: { kind: 'user' },
+    }))
+    handle.agent.followup(createUserMessage({
+      content: [{
+        type: 'text',
+        text: `${marker}\n\n这是飞书协调器机械委派的执行任务。不要再创建子 Agent。开始工具工作前，先用 feishu_send_message 向 chatId 发送一条以“【后台任务已开始】”开头的简短回执；有实质进展或阻塞时发送“【后台进度】”。完成后必须发送一条以“【后台任务完成】”开头的最终结果，再给出同样内容的 assistant 最终回答。\n\n原始飞书请求：\n${message.content}`,
+      }],
+      source: { kind: 'user' },
+    }))
+    this.backgroundHandles.add(handle)
+    void this.finishMechanicalBackground(handle, parent.agent, origin, firstSeq, deliver).catch(error => {
+      console.error(`dsh-lark: mechanical background delivery failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    const mention = message.chatType === 'group' && message.senderName?.trim() ? `@${message.senderName.trim()} ` : ''
+    return `${mention}已接手，任务已转到后台执行；这里继续保持可响应，进度和结果会直接回到本群。`
+  }
+
+  private async createMechanicalBackgroundAgent(parent: AgentLike): Promise<AgentHandleLike> {
+    const fallback = this.deps.selection()
+    const selection = {
+      provider: this.config.provider ?? fallback.provider,
+      model: this.config.model ?? fallback.model,
+    }
+    const workspace = this.config.workspace === undefined
+      ? this.deps.workspaceRegistry.list()[0]
+      : await this.deps.workspaceRegistry.resolveByPath(this.config.workspace)
+    const cwd = this.config.workspace ?? workspace?.path ?? process.cwd()
+    const agentPreset = (await this.deps.agentPresets.resolve(this.config.agentPreset)).id
+    const setup = async (agentCtx: Parameters<typeof installModelSelection>[0]) => {
+      installModelSelection(agentCtx, { current: selection, assembled: undefined })
+      await this.deps.agentPresets.mount(agentCtx, agentPreset)
+    }
+    const sessionId = SessionId(randomUUID())
+    const handle = await this.deps.agents.create({
+      sessionId,
+      meta: {
+        cwd,
+        parentSession: SessionId(String(parent.session.id)),
+        origin: 'subagent',
+        delegationDepth: 1,
+        agentPreset,
+      },
+      agentOptions: selection,
+      setup,
+    })
+    try {
+      await workspace?.attachSession(sessionId)
+      return handle
+    } catch (error) {
+      await handle.dispose()
+      throw error
+    }
+  }
+
+  private async finishMechanicalBackground(
+    handle: AgentHandleLike,
+    parent: AgentLike,
+    origin: BackgroundWorkOrigin,
+    firstSeq: number,
+    deliver: (result: BackgroundWorkDelivery) => Promise<void>,
+  ): Promise<void> {
+    let outcome = '后台任务没有产生可交付的最终结果。'
+    try {
+      await handle.agent.whenIdle()
+      await this.deps.sessions.flush(handle.agent.session)
+      const result = summarizeTurn(handle.agent.session.events, firstSeq)
+      outcome = result.ok ? result.text : outcome
+      if (!hasSuccessfulFinalFeishuDelivery(handle.agent.session.events, firstSeq)) {
+        await deliver({ ...origin, text: outcome })
+      }
+    } catch (error) {
+      outcome = `后台任务执行失败：${error instanceof Error ? error.message : String(error)}`
+      await deliver({ ...origin, text: outcome })
+    } finally {
+      parent.inject?.(createUserMessage({
+        content: [{ type: 'text', text: `系统状态：后台任务 ${origin.messageId ?? '(unknown)'} 已结束。结果摘要：${outcome.slice(0, 2_000)}` }],
+        source: { kind: 'user' },
+      }))
+      if (this.backgroundHandles.delete(handle)) await handle.dispose()
+    }
   }
 
   private getOrCreate(key: string): Promise<AgentHandleLike> {
@@ -243,6 +370,32 @@ export class HarnessConversationService {
       await handle.dispose()
     }
   }
+}
+
+function shouldDelegateOperationalTask(message: InboundMessage): boolean {
+  if (message.messageId === undefined || !message.sourceText?.trim()) return false
+  if (message.chatType === 'group' && message.mentionedBot !== true) return false
+  return OPERATIONAL_TASK_PATTERN.test(message.sourceText)
+}
+
+function hasSuccessfulFinalFeishuDelivery(events: readonly any[], firstSeq: number): boolean {
+  const calls = new Set<string>()
+  for (const event of events) {
+    if (event.seq < firstSeq || event.type !== 'tool/call' || event.data.name !== 'feishu_send_message') continue
+    try {
+      const args = JSON.parse(event.data.arguments) as { message?: unknown }
+      if (typeof args.message === 'string' && args.message.trimStart().startsWith('【后台任务完成】')) calls.add(String(event.data.callId))
+    } catch {
+      // An invalid call cannot count as a successful final delivery.
+    }
+  }
+  return events.some(event => (
+    event.seq >= firstSeq
+    && event.type === 'tool/result'
+    && calls.has(String(event.data.message?.content?.[0]?.toolCallId))
+    && event.data.error === undefined
+    && event.data.message?.content?.[0]?.isError !== true
+  ))
 }
 
 function backgroundWorkOrigin(events: readonly SessionEvent[]): BackgroundWorkOrigin | undefined {

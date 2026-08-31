@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Mechanically delegate explicit operational Feishu requests to continuable
+  background Agents before the parent model runs, with immediate acknowledgement,
+  durable parent context, progress prompts, and final-delivery fallback.
+- Download message attachments through Feishu's message-resource API first and
+  continue processing the message when an individual resource is unavailable.
 - Parse app-bot interactive cards and preserve their Feishu sender names in
   incoming, history, and explicit message reads.
 - Hydrate replies with the quoted sender, current text, and downloaded

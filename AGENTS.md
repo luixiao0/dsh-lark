@@ -37,6 +37,9 @@ copy it into that workspace.
 - Commit downloaded images to Harness attachment storage and include native
   image blocks in the same user turn. A local path is operational context, not
   a substitute for model image input.
+- Download attachments from the message-scoped resource API first and retain
+  the legacy image/file API only as fallback. A failed attachment must remain
+  visible as unavailable metadata and must never drop the surrounding message.
 - Expose explicit Agent tools for current message reads, paginated chat history,
   editing, and recall. Feishu publishes recall events but no message-edited
   event; re-read a message to observe its current `updated` content.
@@ -52,6 +55,11 @@ copy it into that workspace.
   marker. On startup, resume only children whose latest durable turn ended as
   `interrupted`; verify side effects before retrying and deliver their final
   result through the channel. A later completed turn makes recovery idempotent.
+- Explicit execution requests with common repair/install/deploy/configure/
+  migrate/implement/research verbs are mechanically delegated by the bridge
+  before the parent model runs. The parent receives durable injected status,
+  returns an immediate acknowledgement, and remains free for later messages;
+  ordinary questions and ambient group context still use the parent directly.
 - Register Agent tools against the Harness-provided `tools` service with a
   standard JSON Schema definition. Do not import another `dsh-tools` runtime
   into this locally linked plugin; its versioned peer graph belongs to the host.

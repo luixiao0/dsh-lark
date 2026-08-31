@@ -16,7 +16,10 @@ export interface QuotedFeishuMessage {
   resources: LocalResource[]
 }
 
-export type ContextualNormalizedMessage = NormalizedMessage & { quotedMessage?: QuotedFeishuMessage }
+export type ContextualNormalizedMessage = NormalizedMessage & {
+  quotedMessage?: QuotedFeishuMessage
+  sourceText?: string
+}
 
 export interface TimerScheduler {
   timeout(callback: () => void, delayMs: number): () => void
@@ -137,8 +140,9 @@ export function toAgentMessage(messages: readonly NormalizedMessage[], replyBind
   return {
     ...latest,
     resources,
+    sourceText: latest.content,
     content: `<feishu_messages mode=${JSON.stringify(mode)} chat_id=${JSON.stringify(latest.chatId)} chat_type=${JSON.stringify(latest.chatType)} thread_id=${JSON.stringify(latest.threadId ?? '')} timezone=${JSON.stringify(AGENT_TIME_ZONE)} current_time=${JSON.stringify(formatLocalTime(Date.now()))}>\n${entries}\n</feishu_messages>`,
-  }
+  } as ContextualNormalizedMessage
 }
 
 export function isAmbientGroupBatch(messages: readonly NormalizedMessage[]): boolean {
