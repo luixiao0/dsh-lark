@@ -14,6 +14,7 @@ import type { FeishuChatType, MessageSyncState } from './message-sync-state.ts'
 
 const INITIAL_CATCHUP_LOOKBACK_MS = 30 * 60_000
 const CATCHUP_CURSOR_OVERLAP_MS = 1_000
+const GROUP_DIRECTORY_TTL_MS = 5 * 60_000
 
 interface HistoricalMessageItem {
   message_id?: string
@@ -100,24 +101,65 @@ export async function startChannel(
   const messageSync = dependencies.messageSync ?? new PersistentMessageSyncState()
   const identityMap = new IdentityMap(config.identityMapFile || undefined)
   const senderNames = new Map<string, string>()
+  const observedGroupMembers = new Map<string, Map<string, string>>()
+  const groupDirectoryCheckedAt = new Map<string, number>()
+
+  const rememberGroupMember = (chatId: string, openId: string, name: string | undefined) => {
+    if (!chatId.startsWith('oc_') || !openId.startsWith('ou_') || !name?.trim()) return
+    const members = observedGroupMembers.get(chatId) ?? new Map<string, string>()
+    members.set(openId, name.trim())
+    observedGroupMembers.set(chatId, members)
+    senderNames.set(openId, name.trim())
+  }
+
+  const groupMembers = async (chatId: string): Promise<Array<{ feishuOpenId: string; name: string }>> => {
+    const checkedAt = groupDirectoryCheckedAt.get(chatId) ?? 0
+    if (Date.now() - checkedAt >= GROUP_DIRECTORY_TTL_MS) {
+      groupDirectoryCheckedAt.set(chatId, Date.now())
+      try {
+        let pageToken: string | undefined
+        do {
+          const response = await channel.rawClient.im.v1.chatMembers.get({
+            params: {
+              member_id_type: 'open_id',
+              page_size: 100,
+              ...(pageToken === undefined ? {} : { page_token: pageToken }),
+            },
+            path: { chat_id: chatId },
+          })
+          for (const member of response.data?.items ?? []) {
+            if (member.member_id !== undefined) rememberGroupMember(chatId, member.member_id, member.name)
+          }
+          pageToken = response.data?.has_more ? response.data.page_token : undefined
+        } while (pageToken)
+      } catch (error) {
+        logger.warn(`dsh-lark: group member lookup failed for ${chatId}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    return [...(observedGroupMembers.get(chatId) ?? new Map()).entries()].map(([feishuOpenId, name]) => ({ feishuOpenId, name }))
+  }
 
   const sendMessage = async (
     chatId: string,
     content: Parameters<LarkChannel['send']>[1],
     options?: Parameters<LarkChannel['send']>[2],
+    resolveGroupMentions = chatId.startsWith('oc_'),
   ): Promise<SendResult> => {
     const value = 'text' in content
       ? content.text
       : 'markdown' in content && typeof content.markdown === 'string' ? content.markdown : undefined
-    if (!chatId.startsWith('oc_') || value === undefined) return channel.send(chatId, content, options)
-    const resolved = await identityMap.resolveMentions(value)
+    if (!resolveGroupMentions || value === undefined) return channel.send(chatId, content, options)
+    const resolved = await identityMap.resolveMentions(value, await groupMembers(chatId))
     const resolvedContent = 'text' in content ? { text: resolved.text } : { markdown: resolved.text }
     const mentions = [...(options?.mentions ?? []), ...resolved.mentions]
     return channel.send(chatId, resolvedContent, mentions.length === 0 ? options : { ...options, mentions })
   }
 
   const enrichSenderName = async (message: NormalizedMessage): Promise<NormalizedMessage> => {
-    if (message.senderName?.trim()) return message
+    if (message.senderName?.trim()) {
+      if (message.chatType === 'group') rememberGroupMember(message.chatId, message.senderId, message.senderName)
+      return message
+    }
     let name = senderNames.get(message.senderId)
     try {
       if (name === undefined) name = (await identityMap.resolveFeishu(message.senderId))?.name
@@ -151,6 +193,7 @@ export async function startChannel(
     }
     if (!name) return message
     senderNames.set(message.senderId, name)
+    if (message.chatType === 'group') rememberGroupMember(message.chatId, message.senderId, name)
     return { ...message, senderName: name }
   }
 
@@ -182,7 +225,7 @@ export async function startChannel(
           sent.push(await sendMessage(deliveryChatId, { markdown: text }, hulyEvent === undefined ? {
             replyTo: latest.messageId,
             replyInThread: latest.threadId !== undefined,
-          } : undefined))
+          } : undefined, latest.chatType === 'group'))
         } catch (error) {
           if (hulyEvent === undefined || !latest.chatId.startsWith('ou_') || config.fallbackChatId === '') throw error
           const key = '@_user_1'
@@ -223,7 +266,7 @@ export async function startChannel(
         await sendMessage(latest.chatId, { text: config.errorMessage }, {
           replyTo: latest.messageId,
           replyInThread: latest.threadId !== undefined,
-        })
+        }, latest.chatType === 'group')
         complete = true
       } catch (sendError: unknown) {
         logError(`dsh-lark: fallback reply failed: ${sendError instanceof Error ? sendError.message : String(sendError)}`)
@@ -319,7 +362,7 @@ export async function startChannel(
       if (response.code !== undefined && response.code !== 0) throw new Error(`${response.code}: ${response.msg ?? 'history request failed'}`)
       for (const item of response.data?.items ?? []) {
         const historical = item as HistoricalMessageItem
-        if (historical.sender?.id && historical.sender.sender_name) senderNames.set(historical.sender.id, historical.sender.sender_name)
+        if (historical.sender?.id && historical.sender.sender_name) rememberGroupMember(chatId, historical.sender.id, historical.sender.sender_name)
         const raw = rawHistoricalEvent(historical, chatId, chatType)
         if (raw === undefined) continue
         const message = await normalize(raw, { botIdentity })

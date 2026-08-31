@@ -42,4 +42,19 @@ describe('IdentityMap mentions', () => {
 
     await expect(identities.resolveMentions('@同学 请处理')).resolves.toEqual({ text: '@同学 请处理', mentions: [] })
   })
+
+  it('uses exact fallback group members without overriding identity mappings', async () => {
+    const identities = await identityMap([{ feishuOpenId: 'ou_mapped', name: 'Owner' }])
+
+    await expect(identities.resolveMentions('@Owner @Amagi', [
+      { feishuOpenId: 'ou_other', name: 'Owner' },
+      { feishuOpenId: 'ou_amagi', name: 'Amagi' },
+    ])).resolves.toEqual({
+      text: '@_dsh_user_1 @_dsh_user_2',
+      mentions: [
+        { key: '@_dsh_user_1', openId: 'ou_mapped', name: 'Owner' },
+        { key: '@_dsh_user_2', openId: 'ou_amagi', name: 'Amagi' },
+      ],
+    })
+  })
 })

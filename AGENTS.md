@@ -34,9 +34,9 @@ copy it into that workspace.
 - Register Agent tools against the Harness-provided `tools` service with a
   standard JSON Schema definition. Do not import another `dsh-tools` runtime
   into this locally linked plugin; its versioned peer graph belongs to the host.
-- Group output converts `@<exact identity-map key>` to a native Feishu mention.
-  Ambiguous or unknown targets remain plain text so the bot never mentions the
-  wrong person.
+- Group output converts `@<exact identity-map key>` or an exact unique current
+  group-member name to a native Feishu mention. The identity map wins; ambiguous
+  or unknown targets remain plain text so the bot never mentions the wrong person.
 - `larkDelivery` may send to any `open_id`; a non-empty `groupAllowlist` still
   constrains explicit group targets for deployments that choose one.
 - Do not add cron or periodic monitoring. Proactive delivery is event-driven.

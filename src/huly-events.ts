@@ -68,7 +68,7 @@ export class IdentityMap {
     return matches[0]
   }
 
-  async resolveMentions(text: string): Promise<ResolvedFeishuMentions> {
+  async resolveMentions(text: string, fallbackUsers: IdentityMapping[] = []): Promise<ResolvedFeishuMentions> {
     const document = await this.read()
     const candidates = new Map<string, IdentityMapping | undefined>()
     for (const item of document.users) {
@@ -76,6 +76,15 @@ export class IdentityMap {
         const normalized = key.toLocaleLowerCase()
         if (!candidates.has(normalized)) candidates.set(normalized, item)
         else if (candidates.get(normalized)?.feishuOpenId !== item.feishuOpenId) candidates.set(normalized, undefined)
+      }
+    }
+    for (const item of fallbackUsers) {
+      for (const key of recipientKeys(item)) {
+        const normalized = key.toLocaleLowerCase()
+        if (!candidates.has(normalized)) candidates.set(normalized, item)
+        else if (candidates.get(normalized)?.feishuOpenId !== item.feishuOpenId && !document.users.some(user => recipientKeys(user).some(value => value.toLocaleLowerCase() === normalized))) {
+          candidates.set(normalized, undefined)
+        }
       }
     }
 

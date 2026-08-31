@@ -6,6 +6,8 @@
   explicit identity-map resolution, with main-group mention fallback.
 - Convert exact, unique identity-map references in group output to native
   Feishu mentions instead of displaying inert `@name` text.
+- Resolve unmapped mention targets from exact unique current-group member names,
+  including members observed from inbound messages when directory lookup fails.
 - Register the proactive tool directly with the host tool registry so the local
   plugin does not load a second, version-mismatched Harness runtime dependency.
 

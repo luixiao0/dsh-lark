@@ -121,6 +121,27 @@ describe('startChannel', () => {
     expect(bridge.reply.mock.calls[0]![0].content).toContain('"senderName":"冯嘉宁"')
   })
 
+  it('converts an exact current group member name to a native mention', async () => {
+    const channel = fakeChannel()
+    channel.rawClient.im.v1.chatMembers.get.mockResolvedValueOnce({
+      data: { items: [{ member_id: 'ou_amagi', name: 'Amagi' }] },
+    })
+    const bridge = { reply: vi.fn(async () => '@Amagi 请处理'), dispose: vi.fn(async () => undefined) }
+    await startChannel(config(), bridge, dependencies(channel))
+
+    await channel.handlers.get('message')!(message({ chatType: 'group', mentionedBot: true }))
+
+    await vi.waitFor(() => expect(channel.send).toHaveBeenCalledWith(
+      'oc_1',
+      { markdown: '@_dsh_user_1 请处理' },
+      {
+        replyTo: 'om_1',
+        replyInThread: false,
+        mentions: [{ key: '@_dsh_user_1', openId: 'ou_amagi', name: 'Amagi' }],
+      },
+    ))
+  })
+
   it('batches ordinary group messages per topic and suppresses an exact ambient token', async () => {
     vi.useFakeTimers()
     const channel = fakeChannel()
