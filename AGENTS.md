@@ -22,10 +22,14 @@ copy it into that workspace.
   the message; retain the stable `open_id` and log the failure.
 - Persist a per-chat Feishu history cursor after inbox persistence. Initial
   connection and every WebSocket reconnection must list history from that
-  cursor and feed recovered user messages through the same enrichment and
-  inbox path; WebSocket reconnection alone does not recover missed events.
+  cursor and feed recovered messages through the same enrichment and inbox
+  path; filter only this application's own writes, not every `app` sender.
+  WebSocket reconnection alone does not recover missed events.
 - Download inbound Feishu resources before the Agent turn. File delivery from
   the Agent uses exact `DSH_FEISHU_FILE:/absolute/path` response lines.
+- Commit downloaded images to Harness attachment storage and include native
+  image blocks in the same user turn. A local path is operational context, not
+  a substitute for model image input.
 - A failed proactive DM falls back to the configured main group and mentions
   the target user.
 - `feishu_send_message` is the Agent-facing proactive DM tool. Resolve its

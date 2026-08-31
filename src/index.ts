@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
+import type {} from '@deepseek-ai/dsh-attachment'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-host-webserver'
@@ -46,7 +47,7 @@ declare module '@deepseek-ai/cordis' {
 
 export const name = 'lark-channel'
 export const inject = [
-  'agents', 'sessions', 'sessionPersistence', 'agentDefaultModel', 'agentPresets', 'workspaceRegistry',
+  'attachments', 'agents', 'sessions', 'sessionPersistence', 'agentDefaultModel', 'agentPresets', 'workspaceRegistry',
   'settings', 'credentials', 'webServer', 'timer', 'tools',
 ]
 export const Config = ConfigSchema
@@ -54,6 +55,7 @@ export type { PluginConfig }
 export { ConfigSchema } from './config.ts'
 
 export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void> {
+  const attachments = ctx.get('attachments')
   const agents = ctx.get('agents')
   const sessions = ctx.get('sessions')
   const sessionPersistence = ctx.get('sessionPersistence')
@@ -65,8 +67,8 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
   const webServer = ctx.get('webServer')
   const timer = ctx.get('timer') as { timeout(callback: () => void, delay: number): () => void } | undefined
   const tools = ctx.get('tools')
-  if (agents === undefined || sessions === undefined || sessionPersistence === undefined || defaultModel === undefined || agentPresets === undefined || workspaceRegistry === undefined || settings === undefined || credentials === undefined || webServer === undefined || timer === undefined || tools === undefined) {
-    throw new Error('dsh-lark requires Harness agent, settings, credentials, workspace, and webServer services')
+  if (attachments === undefined || agents === undefined || sessions === undefined || sessionPersistence === undefined || defaultModel === undefined || agentPresets === undefined || workspaceRegistry === undefined || settings === undefined || credentials === undefined || webServer === undefined || timer === undefined || tools === undefined) {
+    throw new Error('dsh-lark requires Harness agent, attachment, settings, credentials, workspace, and webServer services')
   }
 
   const settingsScope = settings.register(
@@ -83,6 +85,7 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
     resolveSecret: async ref => (await credentials.resolve(credentialRef(ref)))?.value,
     start: async config => {
       const bridge = new HarnessConversationService({
+        attachments,
         agents,
         sessions,
         sessionPersistence,

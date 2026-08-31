@@ -305,7 +305,10 @@ export async function startChannel(
   }
 
   const rawHistoricalEvent = (item: HistoricalMessageItem, chatId: string, chatType: FeishuChatType): RawMessageEvent | undefined => {
-    if (item.deleted || item.sender?.sender_type !== 'user' || !item.message_id || !item.msg_type || item.body?.content === undefined) return undefined
+    if (item.deleted || item.sender === undefined || !item.message_id || !item.msg_type || item.body?.content === undefined) return undefined
+    const senderType = item.sender.sender_type.toLowerCase()
+    if (senderType !== 'user' && senderType !== 'app') return undefined
+    if (senderType === 'app' && item.sender.id === config.appId) return undefined
     const senderId = item.sender.id_type === 'user_id'
       ? { user_id: item.sender.id }
       : item.sender.id_type === 'union_id'

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Deliver downloaded Feishu images to Harness as durable native image blocks
+  in the same turn instead of exposing only a local filesystem path.
+- Preserve historical messages from other applications when Feishu exposes
+  them, while continuing to filter this application's own writes.
 - Expose `feishu_send_message` to Agents for proactive direct messages using
   explicit identity-map resolution, with main-group mention fallback.
 - Convert exact, unique identity-map references in group output to native

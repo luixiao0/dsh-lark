@@ -29,6 +29,7 @@ function fixture() {
 
 function dependencies(f: ReturnType<typeof fixture>) {
   return {
+    attachments: { saveImages: vi.fn(async () => []) },
     agents: { create: f.create, resume: f.resume, get: (id: string) => f.agents.get(id) },
     sessions: { flush: f.flush },
     sessionPersistence: { list: vi.fn(async () => []) },
@@ -126,7 +127,7 @@ describe('HarnessConversationService', () => {
 
   it('rejects a turn that commits no successful assistant answer', async () => {
     const create = vi.fn(async ({ sessionId }: any) => ({ agent: { session: { id: sessionId, seq: 0, events: [{ seq: 0, type: 'turn/end', data: { reason: { kind: 'error' } } }] }, whenIdle: async () => undefined, followup() {} }, dispose: async () => undefined }))
-    const service = new HarnessConversationService({ agents: { create, resume: vi.fn(), get: () => undefined }, sessions: { flush: async () => true }, sessionPersistence: { list: async () => [] }, selection: () => ({ provider: 'p', model: 'm' }), agentPresets: { resolve: async () => ({ id: 'default' }), mount: async () => undefined }, workspaceRegistry: { list: () => [], resolveByPath: async () => undefined } }, { domain: 'feishu', workspace: '/work' })
+    const service = new HarnessConversationService({ attachments: { saveImages: async () => [] }, agents: { create, resume: vi.fn(), get: () => undefined }, sessions: { flush: async () => true }, sessionPersistence: { list: async () => [] }, selection: () => ({ provider: 'p', model: 'm' }), agentPresets: { resolve: async () => ({ id: 'default' }), mount: async () => undefined }, workspaceRegistry: { list: () => [], resolveByPath: async () => undefined } }, { domain: 'feishu', workspace: '/work' })
     await expect(service.reply({ chatId: 'a', chatType: 'p2p', content: 'one' })).rejects.toThrow(/successful assistant response/)
   })
 })

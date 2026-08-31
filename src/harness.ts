@@ -1,5 +1,9 @@
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import type { AttachmentStore, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import { readFile } from 'node:fs/promises'
+import type { LocalResource } from './attachments.ts'
 import { conversationKey, summarizeTurn, toSessionId } from './conversation.ts'
 import type { ConversationMessage } from './conversation.ts'
 import type { DomainName } from './config.ts'
@@ -18,6 +22,7 @@ interface WorkspaceLike {
 }
 
 export interface HarnessDependencies {
+  attachments: Pick<AttachmentStore, 'saveImages'>
   agents: {
     create: (options: any) => Promise<AgentHandleLike>
     resume: (options: any) => Promise<AgentHandleLike>
@@ -44,7 +49,10 @@ export interface HarnessBridgeConfig {
   model?: string
 }
 
-export interface InboundMessage extends ConversationMessage { content: string }
+export interface InboundMessage extends ConversationMessage {
+  content: string
+  resources?: readonly LocalResource[]
+}
 
 export class HarnessConversationService {
   private readonly handles = new Map<string, Promise<AgentHandleLike>>()
@@ -57,8 +65,23 @@ export class HarnessConversationService {
     const agent = handle.agent
     await agent.whenIdle()
     const firstSeq = agent.session.seq
+    const content: ContentBlock[] = [{ type: 'text', text: message.content }]
+    const images = (message.resources ?? []).filter((resource): resource is LocalResource & { type: 'image', localPath: string } => (
+      resource.type === 'image' && resource.localPath !== undefined
+    ))
+    if (images.length > 0) {
+      const refs = await this.deps.attachments.saveImages(await Promise.all(images.map(async image => {
+        const data = await readFile(image.localPath)
+        return {
+          data,
+          mediaType: detectImageMediaType(data),
+          ...(image.fileName === undefined ? {} : { name: image.fileName }),
+        }
+      })))
+      content.push(...refs.map(attachment => ({ type: 'image' as const, attachment })))
+    }
     agent.followup(createUserMessage({
-      content: [{ type: 'text', text: message.content }],
+      content,
       source: { kind: 'user' },
     }))
     await agent.whenIdle()
@@ -122,4 +145,13 @@ export class HarnessConversationService {
     }
     return handle
   }
+}
+
+function detectImageMediaType(data: Uint8Array): ImageMediaType {
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'image/jpeg'
+  if (data.length >= 8 && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47 && data[4] === 0x0d && data[5] === 0x0a && data[6] === 0x1a && data[7] === 0x0a) return 'image/png'
+  const prefix = Buffer.from(data.subarray(0, 12)).toString('ascii')
+  if (prefix.startsWith('GIF87a') || prefix.startsWith('GIF89a')) return 'image/gif'
+  if (prefix.startsWith('RIFF') && prefix.slice(8, 12) === 'WEBP') return 'image/webp'
+  throw new TypeError('Feishu image has an unsupported encoded format')
 }
