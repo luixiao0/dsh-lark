@@ -3,7 +3,7 @@ import type { LarkChannel, LarkChannelOptions, NormalizedMessage, RawMessageEven
 import type { RuntimeConfig } from './config.ts'
 import type { HarnessConversationService } from './harness.ts'
 import type { MessageInbox } from './inbox.ts'
-import { ConversationMessageBatcher, isAmbientGroupBatch, toAgentMessage } from './message-batcher.ts'
+import { ConversationMessageBatcher, formatLocalTime, isAmbientGroupBatch, toAgentMessage } from './message-batcher.ts'
 import type { TimerScheduler } from './message-batcher.ts'
 import { basename } from 'node:path'
 import { downloadMessageResources, extractFileDeliveries } from './attachments.ts'
@@ -23,13 +23,16 @@ interface HistoricalMessageItem {
   thread_id?: string
   msg_type?: string
   create_time?: string
+  update_time?: string
   deleted?: boolean
+  updated?: boolean
   chat_id?: string
   sender?: {
     id: string
     id_type: string
     sender_type: string
     sender_name?: string
+    open_bot_id?: string
   }
   body?: { content: string }
   mentions?: Array<{ key: string, id: string, id_type: string, name: string, tenant_key?: string }>
@@ -51,7 +54,53 @@ export interface OutboundMessage {
 
 export interface ActiveLarkChannel {
   send(message: OutboundMessage): Promise<SendResult>
+  listMessages(query: MessageHistoryQuery): Promise<MessageHistoryResult>
+  getMessage(messageId: string): Promise<FeishuMessageRecord>
+  editMessage(messageId: string, text: string): Promise<void>
+  recallMessage(messageId: string): Promise<void>
   stop(): Promise<void>
+}
+
+export interface MessageHistoryQuery {
+  chatId: string
+  limit?: number
+  startTime?: string
+  endTime?: string
+  pageToken?: string
+}
+
+export interface FeishuMessageRecord {
+  messageId: string
+  chatId: string
+  senderId: string
+  senderName: string
+  senderType: string
+  messageType: string
+  text: string
+  createdAt: string
+  updatedAt?: string
+  updated: boolean
+  deleted: boolean
+  threadId?: string
+  replyToMessageId?: string
+  resources: Array<{ type: string; fileName?: string; localPath?: string }>
+}
+
+export interface MessageHistoryResult {
+  messages: FeishuMessageRecord[]
+  hasMore: boolean
+  pageToken?: string
+}
+
+interface RecallEvent {
+  message_id?: string
+  chat_id?: string
+  recall_time?: string
+  recall_type?: string
+}
+
+interface DispatcherChannel {
+  dispatcher?: { register(handlers: Record<string, (event: RecallEvent) => Promise<void>>): unknown }
 }
 
 export interface StartChannelDependencies {
@@ -308,12 +357,12 @@ export async function startChannel(
     if (item.deleted || item.sender === undefined || !item.message_id || !item.msg_type || item.body?.content === undefined) return undefined
     const senderType = item.sender.sender_type.toLowerCase()
     if (senderType !== 'user' && senderType !== 'app') return undefined
-    if (senderType === 'app' && item.sender.id === config.appId) return undefined
+    const value = senderType === 'app' ? item.sender.open_bot_id || item.sender.id : item.sender.id
     const senderId = item.sender.id_type === 'user_id'
-      ? { user_id: item.sender.id }
+      ? { user_id: value }
       : item.sender.id_type === 'union_id'
-        ? { union_id: item.sender.id }
-        : { open_id: item.sender.id }
+        ? { union_id: value }
+        : { open_id: value }
     const mentions = item.mentions?.map(mention => ({
       key: mention.key,
       id: mention.id_type === 'user_id'
@@ -338,6 +387,41 @@ export async function startChannel(
         content: item.body.content,
         ...(mentions === undefined ? {} : { mentions }),
       },
+    }
+  }
+
+  const isOwnHistoricalMessage = (item: HistoricalMessageItem): boolean => item.sender?.sender_type.toLowerCase() === 'app' && (
+    item.sender.id === config.appId || item.sender.open_bot_id === channel.botIdentity?.openId
+  )
+
+  const messageRecord = async (item: HistoricalMessageItem, chatId: string, chatType: FeishuChatType, download = false): Promise<FeishuMessageRecord | undefined> => {
+    if (!item.message_id || item.sender === undefined) return undefined
+    let normalized: NormalizedMessage | undefined
+    const raw = rawHistoricalEvent(item, chatId, chatType)
+    if (raw !== undefined && channel.botIdentity !== undefined) {
+      normalized = await enrichSenderName(await normalize(raw, { botIdentity: channel.botIdentity }))
+      if (download) normalized = await downloadMessageResources(channel, normalized)
+    }
+    const senderId = normalized?.senderId || item.sender.open_bot_id || item.sender.id
+    return {
+      messageId: item.message_id,
+      chatId: item.chat_id || chatId,
+      senderId,
+      senderName: normalized?.senderName?.trim() || item.sender.sender_name?.trim() || senderId,
+      senderType: item.sender.sender_type,
+      messageType: item.msg_type || 'unknown',
+      text: item.deleted ? '[message recalled]' : normalized?.content ?? item.body?.content ?? '',
+      createdAt: formatLocalTime(Number(item.create_time)),
+      ...(item.update_time === undefined ? {} : { updatedAt: formatLocalTime(Number(item.update_time)) }),
+      updated: item.updated === true,
+      deleted: item.deleted === true,
+      ...(item.thread_id === undefined ? {} : { threadId: item.thread_id }),
+      ...(item.parent_id === undefined ? {} : { replyToMessageId: item.parent_id }),
+      resources: ((normalized?.resources ?? []) as Array<{ type: string; fileName?: string; localPath?: string }>).map(resource => ({
+        type: resource.type,
+        ...(resource.fileName === undefined ? {} : { fileName: resource.fileName }),
+        ...(resource.localPath === undefined ? {} : { localPath: resource.localPath }),
+      })),
     }
   }
 
@@ -366,6 +450,7 @@ export async function startChannel(
       for (const item of response.data?.items ?? []) {
         const historical = item as HistoricalMessageItem
         if (historical.sender?.id && historical.sender.sender_name) rememberGroupMember(chatId, historical.sender.id, historical.sender.sender_name)
+        if (isOwnHistoricalMessage(historical)) continue
         const raw = rawHistoricalEvent(historical, chatId, chatType)
         if (raw === undefined) continue
         const message = await normalize(raw, { botIdentity })
@@ -433,6 +518,28 @@ export async function startChannel(
     throw error
   }
 
+  const dispatcher = (channel as unknown as DispatcherChannel).dispatcher
+  dispatcher?.register({
+    'im.message.recalled_v1': async event => {
+      if (!event.message_id || !event.chat_id) return
+      const mode = await channel.getChatMode(event.chat_id)
+      await acceptFeishuMessage({
+        messageId: `recall:${event.message_id}:${event.recall_time ?? Date.now()}`,
+        chatId: event.chat_id,
+        chatType: mode === 'p2p' ? 'p2p' : 'group',
+        senderId: 'feishu-system',
+        senderName: 'Feishu',
+        content: `[message recalled] messageId=${event.message_id} recallType=${event.recall_type ?? 'unknown'}`,
+        rawContentType: 'system',
+        resources: [],
+        mentions: [],
+        mentionAll: false,
+        mentionedBot: false,
+        createTime: Number(event.recall_time) || Date.now(),
+      })
+    },
+  })
+
   const unsubscribers = [
     channel.on('message', async (message: NormalizedMessage) => {
       await acceptFeishuMessage(message)
@@ -494,6 +601,59 @@ export async function startChannel(
           mentions: [{ key, openId: mention.openId, name: mention.name }],
         })
       }
+    },
+    listMessages: async query => {
+      const chatId = query.chatId.trim()
+      if (chatId === '') throw new TypeError('chatId is required')
+      const limit = Math.min(50, Math.max(1, Math.trunc(query.limit ?? 20)))
+      const start = query.startTime === undefined ? undefined : Date.parse(query.startTime)
+      const end = query.endTime === undefined ? undefined : Date.parse(query.endTime)
+      if (start !== undefined && !Number.isFinite(start)) throw new TypeError('startTime must be an ISO timestamp')
+      if (end !== undefined && !Number.isFinite(end)) throw new TypeError('endTime must be an ISO timestamp')
+      const mode = await channel.getChatMode(chatId)
+      const response = await channel.rawClient.im.v1.message.list({
+        params: {
+          container_id_type: 'chat',
+          container_id: chatId,
+          sort_type: 'ByCreateTimeDesc',
+          page_size: limit,
+          with_sender_name: true,
+          card_msg_content_type: 'raw_card_content',
+          ...(start === undefined ? {} : { start_time: String(Math.floor(start / 1000)) }),
+          ...(end === undefined ? {} : { end_time: String(Math.floor(end / 1000)) }),
+          ...(query.pageToken?.trim() ? { page_token: query.pageToken.trim() } : {}),
+        },
+      })
+      if (response.code !== undefined && response.code !== 0) throw new Error(`${response.code}: ${response.msg ?? 'history request failed'}`)
+      const records = await Promise.all((response.data?.items ?? []).map(item => messageRecord(item as HistoricalMessageItem, chatId, mode === 'p2p' ? 'p2p' : 'group')))
+      return {
+        messages: records.filter((record): record is FeishuMessageRecord => record !== undefined),
+        hasMore: response.data?.has_more === true,
+        ...(response.data?.page_token === undefined ? {} : { pageToken: response.data.page_token }),
+      }
+    },
+    getMessage: async messageId => {
+      const id = messageId.trim()
+      if (id === '') throw new TypeError('messageId is required')
+      const response = await channel.rawClient.im.v1.message.get({
+        path: { message_id: id },
+        params: { with_sender_name: true, card_msg_content_type: 'raw_card_content' },
+      })
+      if (response.code !== undefined && response.code !== 0) throw new Error(`${response.code}: ${response.msg ?? 'message request failed'}`)
+      const item = response.data?.items?.[0] as HistoricalMessageItem | undefined
+      if (item === undefined || item.chat_id === undefined) throw new Error(`Feishu message not found: ${id}`)
+      const mode = await channel.getChatMode(item.chat_id)
+      const record = await messageRecord(item, item.chat_id, mode === 'p2p' ? 'p2p' : 'group', true)
+      if (record === undefined) throw new Error(`Feishu message is incomplete: ${id}`)
+      return record
+    },
+    editMessage: async (messageId, text) => {
+      if (messageId.trim() === '' || text.trim() === '') throw new TypeError('messageId and text are required')
+      await channel.editMessage(messageId.trim(), text)
+    },
+    recallMessage: async messageId => {
+      if (messageId.trim() === '') throw new TypeError('messageId is required')
+      await channel.recallMessage(messageId.trim())
     },
     stop: async () => {
       stopped = true

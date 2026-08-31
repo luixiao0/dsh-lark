@@ -23,6 +23,10 @@ import { handleSettingsRequest, SETTINGS_PATH } from './web.ts'
 
 export interface LarkDeliveryService {
   send(message: OutboundMessage): ReturnType<LarkRuntime['send']>
+  listMessages(query: Parameters<LarkRuntime['listMessages']>[0]): ReturnType<LarkRuntime['listMessages']>
+  getMessage(messageId: string): ReturnType<LarkRuntime['getMessage']>
+  editMessage(messageId: string, text: string): ReturnType<LarkRuntime['editMessage']>
+  recallMessage(messageId: string): ReturnType<LarkRuntime['recallMessage']>
 }
 
 interface LarkToolRegistry {
@@ -105,6 +109,10 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
 
   const delivery = {
     send: (message: OutboundMessage) => runtime.send(message),
+    listMessages: (query: Parameters<LarkRuntime['listMessages']>[0]) => runtime.listMessages(query),
+    getMessage: (messageId: string) => runtime.getMessage(messageId),
+    editMessage: (messageId: string, text: string) => runtime.editMessage(messageId, text),
+    recallMessage: (messageId: string) => runtime.recallMessage(messageId),
   }
   ctx.provide('larkDelivery', delivery)
   ctx.effect(() => tools.register({
@@ -162,6 +170,101 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
       }
     },
   }), 'dsh-lark: proactive Feishu direct-message tool')
+
+  ctx.effect(() => tools.register({
+    name: 'feishu_get_chat_history',
+    description: 'Read the latest messages currently visible to this Feishu application in one chat. Use the chat_id from the feishu_messages envelope. Results identify edited and recalled messages. Feishu does not expose webhook-bot messages to this application.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        chatId: { type: 'string', description: 'Exact Feishu chat_id from the current conversation envelope.' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, default: 20 },
+        startTime: { type: 'string', description: 'Optional ISO-8601 inclusive lower time bound.' },
+        endTime: { type: 'string', description: 'Optional ISO-8601 inclusive upper time bound.' },
+        pageToken: { type: 'string', description: 'Optional pageToken returned by the previous call.' },
+      },
+      required: ['chatId'],
+    },
+    output: {
+      schema: { type: 'object' },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args) {
+      const input = args as { chatId?: unknown; limit?: unknown; startTime?: unknown; endTime?: unknown; pageToken?: unknown }
+      if (typeof input.chatId !== 'string') throw new TypeError('chatId is required')
+      if (input.limit !== undefined && typeof input.limit !== 'number') throw new TypeError('limit must be a number')
+      if (input.startTime !== undefined && typeof input.startTime !== 'string') throw new TypeError('startTime must be a string')
+      if (input.endTime !== undefined && typeof input.endTime !== 'string') throw new TypeError('endTime must be a string')
+      if (input.pageToken !== undefined && typeof input.pageToken !== 'string') throw new TypeError('pageToken must be a string')
+      return runtime.listMessages({
+        chatId: input.chatId,
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
+        ...(input.startTime === undefined ? {} : { startTime: input.startTime }),
+        ...(input.endTime === undefined ? {} : { endTime: input.endTime }),
+        ...(input.pageToken === undefined ? {} : { pageToken: input.pageToken }),
+      })
+    },
+  }), 'dsh-lark: Feishu chat-history tool')
+
+  ctx.effect(() => tools.register({
+    name: 'feishu_get_message',
+    description: 'Re-read one Feishu message by message_id and return its current edited/deleted state. Image and file resources are downloaded to owner-only local paths.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: { messageId: { type: 'string', description: 'Exact Feishu message_id.' } },
+      required: ['messageId'],
+    },
+    output: {
+      schema: { type: 'object' },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args) {
+      const input = args as { messageId?: unknown }
+      if (typeof input.messageId !== 'string') throw new TypeError('messageId is required')
+      return runtime.getMessage(input.messageId)
+    },
+  }), 'dsh-lark: Feishu message-read tool')
+
+  ctx.effect(() => tools.register({
+    name: 'feishu_edit_message',
+    description: 'Edit a Feishu text or rich-text message by message_id. Feishu normally permits the bot to edit only messages it sent and may enforce an administrator-defined time limit.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: { messageId: { type: 'string' }, text: { type: 'string' } },
+      required: ['messageId', 'text'],
+    },
+    output: {
+      schema: { type: 'object' },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args) {
+      const input = args as { messageId?: unknown; text?: unknown }
+      if (typeof input.messageId !== 'string' || typeof input.text !== 'string') throw new TypeError('messageId and text are required')
+      await runtime.editMessage(input.messageId, input.text)
+      return { ok: true, messageId: input.messageId }
+    },
+  }), 'dsh-lark: Feishu message-edit tool')
+
+  ctx.effect(() => tools.register({
+    name: 'feishu_recall_message',
+    description: 'Recall a Feishu message by message_id. Feishu enforces the tenant recall time limit and requires group owner/admin rights to recall another member\'s message.',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      properties: { messageId: { type: 'string' } },
+      required: ['messageId'],
+    },
+    output: {
+      schema: { type: 'object' },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args) {
+      const input = args as { messageId?: unknown }
+      if (typeof input.messageId !== 'string') throw new TypeError('messageId is required')
+      await runtime.recallMessage(input.messageId)
+      return { ok: true, messageId: input.messageId }
+    },
+  }), 'dsh-lark: Feishu message-recall tool')
 
   const api = createSettingsApi({
     getSettings: currentSettings,

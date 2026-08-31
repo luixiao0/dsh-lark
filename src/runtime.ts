@@ -1,6 +1,6 @@
 import { resolveRuntimeConfig } from './config.ts'
 import type { RuntimeConfig, SettingsConfig } from './config.ts'
-import type { ActiveLarkChannel, OutboundMessage } from './channel.ts'
+import type { ActiveLarkChannel, MessageHistoryQuery, OutboundMessage } from './channel.ts'
 import type { SendResult } from '@larksuiteoapi/node-sdk'
 
 export type RuntimeStatus =
@@ -88,6 +88,32 @@ export class LarkRuntime {
     const current = this.current
     if (current === undefined || this.snapshot.state !== 'connected') throw new Error('dsh-lark channel is not connected')
     return current.channel.send(message)
+  }
+
+  listMessages(query: MessageHistoryQuery): ReturnType<ActiveLarkChannel['listMessages']> {
+    const current = this.connectedChannel()
+    return current.listMessages(query)
+  }
+
+  getMessage(messageId: string): ReturnType<ActiveLarkChannel['getMessage']> {
+    const current = this.connectedChannel()
+    return current.getMessage(messageId)
+  }
+
+  editMessage(messageId: string, text: string): ReturnType<ActiveLarkChannel['editMessage']> {
+    const current = this.connectedChannel()
+    return current.editMessage(messageId, text)
+  }
+
+  recallMessage(messageId: string): ReturnType<ActiveLarkChannel['recallMessage']> {
+    const current = this.connectedChannel()
+    return current.recallMessage(messageId)
+  }
+
+  private connectedChannel(): ActiveLarkChannel {
+    const current = this.current
+    if (current === undefined || this.snapshot.state !== 'connected') throw new Error('dsh-lark channel is not connected')
+    return current.channel
   }
 
   private enqueue(operation: () => Promise<void>): Promise<void> {

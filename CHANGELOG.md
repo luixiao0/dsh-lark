@@ -6,6 +6,8 @@
   in the same turn instead of exposing only a local filesystem path.
 - Preserve historical messages from other applications when Feishu exposes
   them, while continuing to filter this application's own writes.
+- Add Agent tools for paginated chat history, current message reads, editing,
+  and recall, and deliver Feishu recall events into the conversation.
 - Expose `feishu_send_message` to Agents for proactive direct messages using
   explicit identity-map resolution, with main-group mention fallback.
 - Convert exact, unique identity-map references in group output to native

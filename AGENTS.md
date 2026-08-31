@@ -30,6 +30,9 @@ copy it into that workspace.
 - Commit downloaded images to Harness attachment storage and include native
   image blocks in the same user turn. A local path is operational context, not
   a substitute for model image input.
+- Expose explicit Agent tools for current message reads, paginated chat history,
+  editing, and recall. Feishu publishes recall events but no message-edited
+  event; re-read a message to observe its current `updated` content.
 - A failed proactive DM falls back to the configured main group and mentions
   the target user.
 - `feishu_send_message` is the Agent-facing proactive DM tool. Resolve its

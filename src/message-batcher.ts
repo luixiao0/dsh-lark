@@ -106,7 +106,7 @@ export function toAgentMessage(messages: readonly NormalizedMessage[], replyBind
   })).join('\n')
   return {
     ...latest,
-    content: `<feishu_messages mode=${JSON.stringify(mode)} chat_type=${JSON.stringify(latest.chatType)} thread_id=${JSON.stringify(latest.threadId ?? '')} timezone=${JSON.stringify(AGENT_TIME_ZONE)} current_time=${JSON.stringify(formatLocalTime(Date.now()))}>\n${entries}\n</feishu_messages>`,
+    content: `<feishu_messages mode=${JSON.stringify(mode)} chat_id=${JSON.stringify(latest.chatId)} chat_type=${JSON.stringify(latest.chatType)} thread_id=${JSON.stringify(latest.threadId ?? '')} timezone=${JSON.stringify(AGENT_TIME_ZONE)} current_time=${JSON.stringify(formatLocalTime(Date.now()))}>\n${entries}\n</feishu_messages>`,
   }
 }
 
@@ -114,7 +114,7 @@ export function isAmbientGroupBatch(messages: readonly NormalizedMessage[]): boo
   return messages.length > 0 && messages.every(message => message.chatType === 'group' && !message.mentionedBot)
 }
 
-function formatLocalTime(timestamp: number): string {
+export function formatLocalTime(timestamp: number): string {
   const date = new Date(timestamp)
   if (!Number.isFinite(date.getTime())) return new Date().toISOString()
   const parts = new Intl.DateTimeFormat('en-CA', {
