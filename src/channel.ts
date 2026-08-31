@@ -230,7 +230,7 @@ export async function startChannel(
           if (hulyEvent === undefined || !latest.chatId.startsWith('ou_') || config.fallbackChatId === '') throw error
           const key = '@_user_1'
           deliveryChatId = config.fallbackChatId
-          sent.push(await sendMessage(deliveryChatId, { text: `${key}\n${text}` }, {
+          sent.push(await sendMessage(deliveryChatId, { text }, {
             mentions: [{ key, openId: latest.chatId, name: hulyEvent.recipient.name ?? '成员' }],
           }))
         }
@@ -242,7 +242,7 @@ export async function startChannel(
           if (hulyEvent === undefined || deliveryChatId !== latest.chatId || !latest.chatId.startsWith('ou_') || config.fallbackChatId === '') throw error
           const key = '@_user_1'
           deliveryChatId = config.fallbackChatId
-          sent.push(await channel.send(deliveryChatId, { text: `${key}\n文件转发` }, {
+          sent.push(await channel.send(deliveryChatId, { text: '文件转发' }, {
             mentions: [{ key, openId: latest.chatId, name: hulyEvent.recipient.name ?? '成员' }],
           }))
           sent.push(await channel.send(deliveryChatId, { file: { source: path, fileName: basename(path) } }))
@@ -487,7 +487,7 @@ export async function startChannel(
         if (!chatId.startsWith('ou_') || mention === undefined || mention.openId !== chatId || fallbackChatId === '') throw error
         if (config.groupAllowlist.length > 0 && !config.groupAllowlist.includes(fallbackChatId)) throw error
         const key = '@_user_1'
-        return sendMessage(fallbackChatId, { text: `${key}\n${message.text ?? message.markdown!}` }, {
+        return sendMessage(fallbackChatId, { text: message.text ?? message.markdown! }, {
           mentions: [{ key, openId: mention.openId, name: mention.name }],
         })
       }

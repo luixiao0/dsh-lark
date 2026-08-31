@@ -133,7 +133,7 @@ describe('startChannel', () => {
 
     await vi.waitFor(() => expect(channel.send).toHaveBeenCalledWith(
       'oc_1',
-      { markdown: '@_dsh_user_1 请处理' },
+      { markdown: '请处理' },
       {
         replyTo: 'om_1',
         replyInThread: false,

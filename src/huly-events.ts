@@ -104,7 +104,7 @@ export class IdentityMap {
         name: item.name?.trim() || key,
       }
       mentions.set(item.feishuOpenId, mention)
-      resolvedText = resolvedText.replace(pattern, mention.key)
+      resolvedText = resolvedText.replace(new RegExp(`${pattern.source}[ \\t]?`, pattern.flags), '')
     }
     return { text: resolvedText, mentions: [...mentions.values()] }
   }

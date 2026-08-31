@@ -26,7 +26,7 @@ describe('IdentityMap mentions', () => {
     ])
 
     await expect(identities.resolveMentions('@冯嘉宁 请看，@lux 也看一下，@未知 保持原样')).resolves.toEqual({
-      text: '@_dsh_user_1 请看，@_dsh_user_2 也看一下，@未知 保持原样',
+      text: '请看，也看一下，@未知 保持原样',
       mentions: [
         { key: '@_dsh_user_1', openId: 'ou_a', name: '冯嘉宁' },
         { key: '@_dsh_user_2', openId: 'ou_b', name: 'Lux' },
@@ -50,7 +50,7 @@ describe('IdentityMap mentions', () => {
       { feishuOpenId: 'ou_other', name: 'Owner' },
       { feishuOpenId: 'ou_amagi', name: 'Amagi' },
     ])).resolves.toEqual({
-      text: '@_dsh_user_1 @_dsh_user_2',
+      text: '',
       mentions: [
         { key: '@_dsh_user_1', openId: 'ou_mapped', name: 'Owner' },
         { key: '@_dsh_user_2', openId: 'ou_amagi', name: 'Amagi' },

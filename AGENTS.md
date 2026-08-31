@@ -37,6 +37,8 @@ copy it into that workspace.
 - Group output converts `@<exact identity-map key>` or an exact unique current
   group-member name to a native Feishu mention. The identity map wins; ambiguous
   or unknown targets remain plain text so the bot never mentions the wrong person.
+- The SDK prepends every outbound `mentions` entry. Remove resolved `@name`
+  tokens from message text; never place SDK mention keys in the visible body.
 - `larkDelivery` may send to any `open_id`; a non-empty `groupAllowlist` still
   constrains explicit group targets for deployments that choose one.
 - Do not add cron or periodic monitoring. Proactive delivery is event-driven.
