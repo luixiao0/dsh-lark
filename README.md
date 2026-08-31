@@ -8,13 +8,13 @@
 
 - 支持飞书中国版和国际版 Lark。
 - 使用 WebSocket 长连接接收事件，无需公网回调地址。
-- 单聊和普通群聊按聊天复用 Harness Session。
+- 单聊按发送者、普通群聊按群复用 Harness Session。
 - 话题群按线程使用独立 Harness Session。
 - 回复会关联原始消息，并保留在原来的话题线程中。
 - 群聊默认需要 @机器人，单聊默认开放。
 - 可以通过白名单限制群聊和单聊用户。
 - 普通群消息按群或话题短时聚合，明确 @机器人时立即处理。
-- Agent 会收到发送者、@状态、消息 ID 和时间信息，不会混淆不同话题。
+- Agent 会收到昵称、稳定发送者标识、消息 ID、本地发送时间、当前时间和 IANA 时区，不会混淆不同说话人或话题。
 - 旁听场景可用精确 `NO_REPLY` 标记保持静默。
 - 收件箱和完成去重状态持久化到 `$DSH_HOME/state/dsh-lark/`。
 - 向其他 Harness 插件提供受群白名单限制的 `larkDelivery` 主动发送 Service。
@@ -332,7 +332,7 @@ dmMode: disabled
 
 ## 会话与并发行为
 
-- 普通单聊和群聊使用聊天级 Session。
+- 单聊使用发送者级 Session，普通群聊使用群级 Session。
 - 话题消息使用线程级 Session。
 - SDK 自带的聊天级聚合被关闭，避免不同话题串线；插件按 Session 会话键聚合。
 - 聚合消息会保留每条消息的发送者、@状态、消息 ID 和时间戳。
@@ -346,6 +346,16 @@ dmMode: disabled
 - 回复只读取当前消息之后产生的 assistant 文本，不会误发上一轮回答。
 - 未完成消息和十二小时内的完成 ID 存放在 `$DSH_HOME/state/dsh-lark/inbox.json`，补拉游标存放在同目录的 `message-sync.json`，文件权限均为 `0600`。
 - 插件不包含 cron 或定时复盘；主动消息由其他 Harness 插件通过 `larkDelivery` 触发。
+
+Agent 实际只接收规范化后的文本包，不接收飞书 SDK 原始事件：
+
+```text
+<feishu_messages mode="request" chat_type="group" thread_id="" timezone="Asia/Shanghai" current_time="2026-08-31T12:00:00.000+08:00">
+{"messageId":"om_x","senderId":"ou_x","senderName":"昵称","sentAt":"2026-08-31T11:59:00.000+08:00","text":"消息","resources":[]}
+</feishu_messages>
+```
+
+`mentionedBot`、`rawContentType` 和内部 `createdAt` 不进入 Agent 上下文；明确请求、群内旁听和 Huly 事件只通过根节点的 `mode` 表达。昵称优先来自事件、群成员列表、身份映射和通讯录；都不可用时使用包含稳定 `open_id` 的占位名，确保多人对话仍可区分。
 
 ## 安全说明
 

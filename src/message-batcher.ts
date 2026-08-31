@@ -5,6 +5,7 @@ import type { LocalResource } from './attachments.ts'
 
 const MAX_BATCH_MESSAGES = 20
 const MAX_BATCH_CHARS = 8000
+const AGENT_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 
 export interface TimerScheduler {
   timeout(callback: () => void, delayMs: number): () => void
@@ -92,7 +93,8 @@ export function toAgentMessage(messages: readonly NormalizedMessage[], replyBind
   const entries = messages.map(message => JSON.stringify({
     messageId: message.messageId,
     senderId: message.senderId,
-    senderName: message.senderName,
+    senderName: message.senderName?.trim() || `Feishu user (${message.senderId})`,
+    sentAt: formatLocalTime(message.createTime),
     text: message.content,
     resources: (message.resources as LocalResource[]).map(resource => ({
       type: resource.type,
@@ -104,10 +106,30 @@ export function toAgentMessage(messages: readonly NormalizedMessage[], replyBind
   })).join('\n')
   return {
     ...latest,
-    content: `<feishu_messages mode=${JSON.stringify(mode)} chat_type=${JSON.stringify(latest.chatType)} thread_id=${JSON.stringify(latest.threadId ?? '')}>\n${entries}\n</feishu_messages>`,
+    content: `<feishu_messages mode=${JSON.stringify(mode)} chat_type=${JSON.stringify(latest.chatType)} thread_id=${JSON.stringify(latest.threadId ?? '')} timezone=${JSON.stringify(AGENT_TIME_ZONE)} current_time=${JSON.stringify(formatLocalTime(Date.now()))}>\n${entries}\n</feishu_messages>`,
   }
 }
 
 export function isAmbientGroupBatch(messages: readonly NormalizedMessage[]): boolean {
   return messages.length > 0 && messages.every(message => message.chatType === 'group' && !message.mentionedBot)
+}
+
+function formatLocalTime(timestamp: number): string {
+  const date = new Date(timestamp)
+  if (!Number.isFinite(date.getTime())) return new Date().toISOString()
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: AGENT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    fractionalSecondDigits: 3,
+    hourCycle: 'h23',
+    timeZoneName: 'longOffset',
+  }).formatToParts(date)
+  const value = (type: Intl.DateTimeFormatPartTypes): string => parts.find(part => part.type === type)?.value ?? ''
+  const zone = value('timeZoneName').replace(/^GMT$/u, 'Z').replace(/^GMT/u, '')
+  return `${value('year')}-${value('month')}-${value('day')}T${value('hour')}:${value('minute')}:${value('second')}.${value('fractionalSecond')}${zone}`
 }

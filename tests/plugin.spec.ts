@@ -83,6 +83,9 @@ describe('startChannel', () => {
     const inbound = bridge.reply.mock.calls[0]![0]
     expect(inbound.content).toContain('<feishu_messages')
     expect(inbound.content).toContain('"senderName":"Lux"')
+    expect(inbound.content).toContain('"sentAt":')
+    expect(inbound.content).toContain('timezone=')
+    expect(inbound.content).toContain('current_time=')
     expect(inbound.content).toContain('mode="request"')
     expect(inbound.content).not.toContain('"mentionedBot"')
     expect(inbound.content).not.toContain('"rawContentType"')
@@ -91,6 +94,17 @@ describe('startChannel', () => {
     await active.stop()
     expect(channel.disconnect).toHaveBeenCalledOnce()
     expect(bridge.dispose).toHaveBeenCalledOnce()
+  })
+
+  it('keeps speakers distinguishable when Feishu does not return a nickname', async () => {
+    const channel = fakeChannel()
+    const bridge = { reply: vi.fn(async () => '收到'), dispose: vi.fn(async () => undefined) }
+    await startChannel(config(), bridge, dependencies(channel))
+
+    await channel.handlers.get('message')!(message({ senderName: undefined }))
+
+    await vi.waitFor(() => expect(bridge.reply).toHaveBeenCalledOnce())
+    expect(bridge.reply.mock.calls[0]![0].content).toContain('"senderName":"Feishu user (ou_1)"')
   })
 
   it('resolves a missing sender name from the Feishu group member list', async () => {
