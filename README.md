@@ -18,6 +18,7 @@
 - 旁听场景可用精确 `NO_REPLY` 标记保持静默。
 - 收件箱和完成去重状态持久化到 `$DSH_HOME/state/dsh-lark/`。
 - 向其他 Harness 插件提供受群白名单限制的 `larkDelivery` 主动发送 Service。
+- 向 Agent 提供 `feishu_send_message` 工具，按显式身份映射主动私聊成员；私聊失败时回退到主群 @本人。
 - 可以沿用 Harness 默认模型，也可以为飞书渠道指定模型。
 - 会话标识经过 SHA-256 处理，不会把原始 `chat_id` 写进 Session ID。
 - Harness 内部错误不会直接发送给飞书用户。
@@ -282,6 +283,8 @@ Harness 重启后，插件会恢复对应的持久化 Session；如果该 Sessio
 | `errorMessage` | 否 | 内置中文提示 | Agent 执行失败时返回给用户的文本，最长 500 个字符 |
 
 `provider` 和 `model` 建议同时设置。如果都不设置，插件会读取 Harness 当前的默认模型配置。
+
+`feishu_send_message` 的收件人可以是明确的飞书 `open_id`，也可以是身份映射中的 Huly/Linear ID、邮箱、姓名或别名。姓名和别名只做精确且唯一的匹配；未登记或重名时工具会拒绝发送。身份映射是唯一授权来源，Agent 不会从聊天昵称猜测跨平台身份。
 
 ### Workspace 和 Agent Preset
 

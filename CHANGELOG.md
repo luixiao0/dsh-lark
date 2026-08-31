@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Expose `feishu_send_message` to Agents for proactive direct messages using
+  explicit identity-map resolution, with main-group mention fallback.
+
 ## 0.2.2-squady.1
 
 - Persist accepted Feishu messages and completed message IDs under `DSH_HOME`

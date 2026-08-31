@@ -45,6 +45,7 @@ export interface OutboundMessage {
   chatId?: string
   text?: string
   markdown?: string
+  fallbackMention?: { openId: string; name: string }
 }
 
 export interface ActiveLarkChannel {
@@ -418,9 +419,20 @@ export async function startChannel(
       const hasText = typeof message.text === 'string' && message.text !== ''
       const hasMarkdown = typeof message.markdown === 'string' && message.markdown !== ''
       if (hasText === hasMarkdown) throw new TypeError('provide exactly one non-empty text or markdown value')
-      return hasText
-        ? channel.send(chatId, { text: message.text! })
-        : channel.send(chatId, { markdown: message.markdown! })
+      try {
+        return hasText
+          ? await channel.send(chatId, { text: message.text! })
+          : await channel.send(chatId, { markdown: message.markdown! })
+      } catch (error) {
+        const mention = message.fallbackMention
+        const fallbackChatId = config.fallbackChatId || config.homeChatId
+        if (!chatId.startsWith('ou_') || mention === undefined || mention.openId !== chatId || fallbackChatId === '') throw error
+        if (config.groupAllowlist.length > 0 && !config.groupAllowlist.includes(fallbackChatId)) throw error
+        const key = '@_user_1'
+        return channel.send(fallbackChatId, { text: `${key}\n${message.text ?? message.markdown!}` }, {
+          mentions: [{ key, openId: mention.openId, name: mention.name }],
+        })
+      }
     },
     stop: async () => {
       stopped = true

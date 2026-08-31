@@ -24,6 +24,12 @@ export interface IdentityMapping {
   hulyPersonId?: string
   linearUserId?: string
   name?: string
+  aliases?: string[]
+  hulyName?: string
+  hulyDisplayName?: string
+  linearName?: string
+  linearDisplayName?: string
+  linearEmail?: string
 }
 
 interface IdentityMapDocument { version: 1; users: IdentityMapping[] }
@@ -44,6 +50,19 @@ export class IdentityMap {
     )
   }
 
+  async resolveRecipient(value: string): Promise<IdentityMapping | undefined> {
+    const query = value.trim()
+    if (query === '') return undefined
+    const document = await this.read()
+    if (query.startsWith('ou_')) {
+      return document.users.find(item => item.feishuOpenId === query) ?? { feishuOpenId: query }
+    }
+    const normalized = query.toLocaleLowerCase()
+    const matches = document.users.filter(item => recipientKeys(item).some(key => key.toLocaleLowerCase() === normalized))
+    if (matches.length > 1) throw new Error(`Feishu recipient is ambiguous: ${query}`)
+    return matches[0]
+  }
+
   private async read(): Promise<IdentityMapDocument> {
     try {
       const value = JSON.parse(await readFile(this.path, 'utf8')) as Partial<IdentityMapDocument>
@@ -53,6 +72,22 @@ export class IdentityMap {
       throw error
     }
   }
+}
+
+function recipientKeys(item: IdentityMapping): string[] {
+  return [
+    item.feishuOpenId,
+    item.hulyAccount,
+    item.hulyPersonId,
+    item.linearUserId,
+    item.linearEmail,
+    item.name,
+    item.hulyName,
+    item.hulyDisplayName,
+    item.linearName,
+    item.linearDisplayName,
+    ...(item.aliases ?? []),
+  ].flatMap(value => typeof value === 'string' && value.trim() !== '' ? [value.trim()] : [])
 }
 
 export interface HulyEventClientOptions {

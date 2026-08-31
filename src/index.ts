@@ -4,6 +4,7 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -15,6 +16,7 @@ import { HarnessConversationService } from './harness.ts'
 import { startChannel } from './channel.ts'
 import type { OutboundMessage } from './channel.ts'
 import { PersistentMessageInbox } from './inbox.ts'
+import { IdentityMap } from './huly-events.ts'
 import { LarkRuntime } from './runtime.ts'
 import { createSettingsApi } from './settings-api.ts'
 import { handleSettingsRequest, SETTINGS_PATH } from './web.ts'
@@ -32,7 +34,7 @@ declare module '@deepseek-ai/cordis' {
 export const name = 'lark-channel'
 export const inject = [
   'agents', 'sessions', 'sessionPersistence', 'agentDefaultModel', 'agentPresets', 'workspaceRegistry',
-  'settings', 'credentials', 'webServer', 'timer',
+  'settings', 'credentials', 'webServer', 'timer', 'tools',
 ]
 export const Config = ConfigSchema
 export type { PluginConfig }
@@ -49,7 +51,8 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
   const credentials = ctx.get('credentials')
   const webServer = ctx.get('webServer')
   const timer = ctx.get('timer') as { timeout(callback: () => void, delay: number): () => void } | undefined
-  if (agents === undefined || sessions === undefined || sessionPersistence === undefined || defaultModel === undefined || agentPresets === undefined || workspaceRegistry === undefined || settings === undefined || credentials === undefined || webServer === undefined || timer === undefined) {
+  const tools = ctx.get('tools')
+  if (agents === undefined || sessions === undefined || sessionPersistence === undefined || defaultModel === undefined || agentPresets === undefined || workspaceRegistry === undefined || settings === undefined || credentials === undefined || webServer === undefined || timer === undefined || tools === undefined) {
     throw new Error('dsh-lark requires Harness agent, settings, credentials, workspace, and webServer services')
   }
 
@@ -88,6 +91,56 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
     send: (message: OutboundMessage) => runtime.send(message),
   }
   ctx.provide('larkDelivery', delivery)
+  ctx.effect(() => tools.register(defineTool({
+    name: 'feishu_send_message',
+    description: 'Send a proactive Feishu direct message to a person. Resolve the recipient only from an explicit Feishu open_id or the protected identity map. If Feishu rejects the direct message, notify the same person by mentioning them in the configured fallback group.',
+    parameters: {
+      recipient: {
+        type: 'string',
+        required: true,
+        description: 'Feishu open_id, mapped Huly account/person ID, mapped Linear user ID/email, or an exact unique mapped name/alias.',
+      },
+      message: {
+        type: 'string',
+        required: true,
+        description: 'Non-empty message to deliver. Feishu markdown is supported.',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          messageId: { type: 'string' },
+          recipientOpenId: { type: 'string' },
+          recipientName: { type: 'string' },
+        },
+        required: ['messageId', 'recipientOpenId', 'recipientName'],
+      },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args) {
+      const recipientInput = args.recipient.trim()
+      const message = args.message.trim()
+      if (message === '') throw new TypeError('Feishu message must not be empty')
+      const identityMap = new IdentityMap(currentSettings().identityMapFile || undefined)
+      const recipient = await identityMap.resolveRecipient(recipientInput)
+      if (recipient === undefined) {
+        throw new Error(`Feishu recipient is not mapped: ${recipientInput}. Update the protected identity map before sending.`)
+      }
+      const recipientName = recipient.name?.trim() || recipientInput
+      const result = await runtime.send({
+        chatId: recipient.feishuOpenId,
+        markdown: message,
+        fallbackMention: { openId: recipient.feishuOpenId, name: recipientName },
+      })
+      return {
+        messageId: result.messageId,
+        recipientOpenId: recipient.feishuOpenId,
+        recipientName,
+      }
+    },
+  })), 'dsh-lark: proactive Feishu direct-message tool')
 
   const api = createSettingsApi({
     getSettings: currentSettings,
