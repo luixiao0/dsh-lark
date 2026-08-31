@@ -1,5 +1,5 @@
-import { Domain, LoggerLevel, createLarkChannel } from '@larksuiteoapi/node-sdk'
-import type { LarkChannel, LarkChannelOptions, NormalizedMessage, SendResult } from '@larksuiteoapi/node-sdk'
+import { Domain, LoggerLevel, createLarkChannel, normalize } from '@larksuiteoapi/node-sdk'
+import type { LarkChannel, LarkChannelOptions, NormalizedMessage, RawMessageEvent, SendResult } from '@larksuiteoapi/node-sdk'
 import type { RuntimeConfig } from './config.ts'
 import type { HarnessConversationService } from './harness.ts'
 import type { MessageInbox } from './inbox.ts'
@@ -9,6 +9,30 @@ import { basename } from 'node:path'
 import { downloadMessageResources, extractFileDeliveries } from './attachments.ts'
 import { HulyEventClient, IdentityMap, hulyEventOf } from './huly-events.ts'
 import { ReplyBindingStore } from './reply-bindings.ts'
+import { PersistentMessageSyncState } from './message-sync-state.ts'
+import type { FeishuChatType, MessageSyncState } from './message-sync-state.ts'
+
+const INITIAL_CATCHUP_LOOKBACK_MS = 30 * 60_000
+const CATCHUP_CURSOR_OVERLAP_MS = 1_000
+
+interface HistoricalMessageItem {
+  message_id?: string
+  root_id?: string
+  parent_id?: string
+  thread_id?: string
+  msg_type?: string
+  create_time?: string
+  deleted?: boolean
+  chat_id?: string
+  sender?: {
+    id: string
+    id_type: string
+    sender_type: string
+    sender_name?: string
+  }
+  body?: { content: string }
+  mentions?: Array<{ key: string, id: string, id_type: string, name: string, tenant_key?: string }>
+}
 
 export type ChannelFactory = (options: LarkChannelOptions) => LarkChannel
 export interface PluginLogger {
@@ -35,6 +59,7 @@ export interface StartChannelDependencies {
   logger?: PluginLogger
   terminalLogger?: Pick<PluginLogger, 'error'>
   bindings?: ReplyBindingStore
+  messageSync?: MessageSyncState
 }
 
 export async function startChannel(
@@ -71,6 +96,7 @@ export async function startChannel(
     },
   })
   const bindings = dependencies.bindings ?? new ReplyBindingStore()
+  const messageSync = dependencies.messageSync ?? new PersistentMessageSyncState()
   const identityMap = new IdentityMap(config.identityMapFile || undefined)
   const senderNames = new Map<string, string>()
 
@@ -195,6 +221,147 @@ export async function startChannel(
     dependencies.scheduler,
     handleBatch,
   )
+
+  const acceptFeishuMessage = async (message: NormalizedMessage) => {
+    const named = await enrichSenderName(message)
+    const durable = await downloadMessageResources(channel, named)
+    const accepted = await dependencies.inbox.accept(durable)
+    try {
+      await messageSync.remember(durable)
+    } catch (error) {
+      logger.warn(`dsh-lark: message sync checkpoint failed for ${durable.chatId}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (accepted) batcher.push(durable)
+  }
+
+  const isAllowedHistoricalMessage = (message: NormalizedMessage): boolean => {
+    if (message.chatType === 'group') {
+      if (config.groupAllowlist.length > 0 && !config.groupAllowlist.includes(message.chatId)) return false
+      if (config.requireMention && !message.mentionedBot) return false
+      if (message.mentionAll && !message.mentionedBot) return false
+      return true
+    }
+    if (config.dmMode === 'disabled') return false
+    return config.dmMode !== 'allowlist' || config.dmAllowlist.includes(message.senderId)
+  }
+
+  const rawHistoricalEvent = (item: HistoricalMessageItem, chatId: string, chatType: FeishuChatType): RawMessageEvent | undefined => {
+    if (item.deleted || item.sender?.sender_type !== 'user' || !item.message_id || !item.msg_type || item.body?.content === undefined) return undefined
+    const senderId = item.sender.id_type === 'user_id'
+      ? { user_id: item.sender.id }
+      : item.sender.id_type === 'union_id'
+        ? { union_id: item.sender.id }
+        : { open_id: item.sender.id }
+    const mentions = item.mentions?.map(mention => ({
+      key: mention.key,
+      id: mention.id_type === 'user_id'
+        ? { user_id: mention.id }
+        : mention.id_type === 'union_id'
+          ? { union_id: mention.id }
+          : { open_id: mention.id },
+      name: mention.name,
+      ...(mention.tenant_key === undefined ? {} : { tenant_key: mention.tenant_key }),
+    }))
+    return {
+      sender: { sender_id: senderId, sender_type: item.sender.sender_type },
+      message: {
+        message_id: item.message_id,
+        ...(item.root_id === undefined ? {} : { root_id: item.root_id }),
+        ...(item.parent_id === undefined ? {} : { parent_id: item.parent_id }),
+        ...(item.thread_id === undefined ? {} : { thread_id: item.thread_id }),
+        ...(item.create_time === undefined ? {} : { create_time: item.create_time }),
+        chat_id: item.chat_id || chatId,
+        chat_type: chatType,
+        message_type: item.msg_type,
+        content: item.body.content,
+        ...(mentions === undefined ? {} : { mentions }),
+      },
+    }
+  }
+
+  const catchUpChat = async (chatId: string, chatType: FeishuChatType, lastCreateTime: number, endTime: number) => {
+    const botIdentity = channel.botIdentity
+    if (botIdentity === undefined) throw new Error('bot identity is unavailable after WebSocket connection')
+    const startTime = lastCreateTime > 0
+      ? Math.max(0, lastCreateTime - CATCHUP_CURSOR_OVERLAP_MS)
+      : endTime - INITIAL_CATCHUP_LOOKBACK_MS
+    let pageToken: string | undefined
+    let recovered = 0
+    do {
+      const response = await channel.rawClient.im.v1.message.list({
+        params: {
+          container_id_type: 'chat',
+          container_id: chatId,
+          start_time: String(Math.floor(startTime / 1000)),
+          end_time: String(Math.floor(endTime / 1000)),
+          sort_type: 'ByCreateTimeAsc',
+          page_size: 50,
+          with_sender_name: true,
+          ...(pageToken === undefined ? {} : { page_token: pageToken }),
+        },
+      })
+      if (response.code !== undefined && response.code !== 0) throw new Error(`${response.code}: ${response.msg ?? 'history request failed'}`)
+      for (const item of response.data?.items ?? []) {
+        const historical = item as HistoricalMessageItem
+        if (historical.sender?.id && historical.sender.sender_name) senderNames.set(historical.sender.id, historical.sender.sender_name)
+        const raw = rawHistoricalEvent(historical, chatId, chatType)
+        if (raw === undefined) continue
+        const message = await normalize(raw, { botIdentity })
+        if (!isAllowedHistoricalMessage(message)) continue
+        await acceptFeishuMessage(message)
+        recovered += 1
+      }
+      pageToken = response.data?.has_more ? response.data.page_token : undefined
+    } while (pageToken)
+    await messageSync.advance(chatId, chatType, endTime)
+    if (recovered > 0) logger.info(`dsh-lark: recovered ${recovered} missed message(s) from ${chatId}`)
+  }
+
+  const catchUpMissedMessages = async () => {
+    const endTime = Date.now()
+    const chats = new Map<string, { chatType: FeishuChatType, lastCreateTime: number }>()
+    for (const checkpoint of await messageSync.list()) chats.set(checkpoint.chatId, checkpoint)
+    if (config.homeChatId.startsWith('oc_') && !chats.has(config.homeChatId)) {
+      chats.set(config.homeChatId, { chatType: 'group', lastCreateTime: 0 })
+    }
+    for (const chatId of config.groupAllowlist) {
+      if (chatId.startsWith('oc_') && !chats.has(chatId)) chats.set(chatId, { chatType: 'group', lastCreateTime: 0 })
+    }
+    try {
+      let pageToken: string | undefined
+      do {
+        const response = await channel.rawClient.im.v1.chat.list({
+          params: { page_size: 100, ...(pageToken === undefined ? {} : { page_token: pageToken }) },
+        })
+        if (response.code !== undefined && response.code !== 0) throw new Error(`${response.code}: ${response.msg ?? 'chat list request failed'}`)
+        for (const chat of response.data?.items ?? []) {
+          if (chat.chat_id && chat.chat_status !== 'dissolved' && chat.chat_status !== 'dissolved_save' && !chats.has(chat.chat_id)) {
+            chats.set(chat.chat_id, { chatType: 'group', lastCreateTime: 0 })
+          }
+        }
+        pageToken = response.data?.has_more ? response.data.page_token : undefined
+      } while (pageToken)
+    } catch (error) {
+      logger.warn(`dsh-lark: group discovery for missed messages failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    for (const [chatId, checkpoint] of chats) {
+      try {
+        await catchUpChat(chatId, checkpoint.chatType, checkpoint.lastCreateTime, endTime)
+      } catch (error) {
+        logger.warn(`dsh-lark: missed-message recovery failed for ${chatId}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+
+  let stopped = false
+  let catchup = Promise.resolve()
+  const scheduleCatchup = () => {
+    catchup = catchup.then(async () => {
+      if (!stopped) await catchUpMissedMessages()
+    }).catch(error => {
+      logger.warn(`dsh-lark: missed-message recovery could not start: ${error instanceof Error ? error.message : String(error)}`)
+    })
+  }
   let recovered: NormalizedMessage[]
   try {
     recovered = await dependencies.inbox.listPending()
@@ -206,12 +373,13 @@ export async function startChannel(
 
   const unsubscribers = [
     channel.on('message', async (message: NormalizedMessage) => {
-      const named = await enrichSenderName(message)
-      const durable = await downloadMessageResources(channel, named)
-      if (await dependencies.inbox.accept(durable)) batcher.push(durable)
+      await acceptFeishuMessage(message)
     }),
     channel.on('reconnecting', () => { logger.warn('dsh-lark: WebSocket reconnecting') }),
-    channel.on('reconnected', () => { logger.info('dsh-lark: WebSocket reconnected') }),
+    channel.on('reconnected', () => {
+      logger.info('dsh-lark: WebSocket reconnected')
+      scheduleCatchup()
+    }),
     channel.on('error', (error) => { logError(`dsh-lark: channel error: ${String(error)}`) }),
   ]
   try {
@@ -238,6 +406,7 @@ export async function startChannel(
   })
   hulyEvents?.start()
   for (const message of recovered) batcher.push(message)
+  scheduleCatchup()
 
   return {
     send: async message => {
@@ -254,8 +423,10 @@ export async function startChannel(
         : channel.send(chatId, { markdown: message.markdown! })
     },
     stop: async () => {
+      stopped = true
       hulyEvents?.stop()
       for (const unsubscribe of unsubscribers) unsubscribe()
+      await catchup
       await batcher.dispose()
       try {
         await channel.disconnect()

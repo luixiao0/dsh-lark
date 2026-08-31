@@ -20,6 +20,10 @@ copy it into that workspace.
 - Before persistence, enrich inbound messages with the explicit identity-map
   name or the current Feishu group-member name. A lookup failure must not drop
   the message; retain the stable `open_id` and log the failure.
+- Persist a per-chat Feishu history cursor after inbox persistence. Initial
+  connection and every WebSocket reconnection must list history from that
+  cursor and feed recovered user messages through the same enrichment and
+  inbox path; WebSocket reconnection alone does not recover missed events.
 - Download inbound Feishu resources before the Agent turn. File delivery from
   the Agent uses exact `DSH_FEISHU_FILE:/absolute/path` response lines.
 - A failed proactive DM falls back to the configured main group and mentions

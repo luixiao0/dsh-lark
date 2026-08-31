@@ -2,7 +2,7 @@
 
 1. Create a custom app in the Feishu or Lark developer console.
 2. Enable the Bot capability and choose a bot name/avatar.
-3. Add the permissions required to receive messages and send replies. The console can derive the exact scopes when `im.message.receive_v1` is added; submit them for administrator approval when required by the tenant.
+3. Add the permissions required to receive messages and send replies. Also grant `im:chat:readonly` and `im:message:readonly` so reconnection recovery can call `im.v1.chat.list` and `im.v1.message.list`. Submit them for administrator approval when required by the tenant.
 4. In **Events & Callbacks / Event Subscriptions**, choose **Use long connection to receive events** (WebSocket). Do not configure a webhook URL.
 5. Add the event `im.message.receive_v1`.
 6. Create and publish an app version, then install the app in the tenant or test tenant.
@@ -17,3 +17,4 @@
 - Group messages ignored: mention the bot, or check `groupAllowlist` and tenant permission approval.
 - Authentication failure during startup: rotate and re-copy App ID/App Secret; the SDK distinguishes permission errors from connection errors.
 - Repeated reconnects: check outbound TLS/WebSocket access and proxies. Only one consumer should use a given app's event stream when deterministic delivery is required because the platform load-balances across long connections.
+- `missed-message recovery failed`: grant the app chat-list and message-history read permissions, publish a new app version, and have the tenant administrator approve it. WebSocket event permission alone cannot read historical messages.

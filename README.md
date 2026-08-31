@@ -70,6 +70,8 @@ npx @deepseek-ai/dsh web
 | `im:message.p2p_msg:readonly` | 获取用户发给机器人的单聊消息 | 接收用户与机器人的单聊消息 | 是 |
 | `im:message.group_at_msg:readonly` | 获取群组中 @机器人的消息 | 接收群聊中明确 @机器人的消息 | 是 |
 | `im:message:send_as_bot` | 以应用的身份发消息 | 让机器人回复单聊、群聊和话题消息 | 是 |
+| `im:chat:readonly` | 获取群组信息 | 发现机器人所在群并建立补拉游标 | 是 |
+| `im:message:readonly` | 获取单聊、群组消息 | 重连后读取断线窗口内的历史消息 | 是 |
 
 飞书控制台中显示的中文名称可能随平台版本略有调整，应以权限标识为准。添加 `im.message.receive_v1` 事件时，控制台通常也会提示补充前两个接收权限。
 
@@ -81,7 +83,9 @@ npx @deepseek-ai/dsh web
     "tenant": [
       "im:message.group_at_msg:readonly",
       "im:message.p2p_msg:readonly",
-      "im:message:send_as_bot"
+      "im:message:send_as_bot",
+      "im:chat:readonly",
+      "im:message:readonly"
     ],
     "user": []
   }
@@ -201,7 +205,7 @@ Profile patch 是基础配置，Settings 页面保存的普通参数是覆盖层
 dsh-lark: WebSocket connected
 ```
 
-运行期间如果网络中断，官方 SDK 会尝试重新连接，并输出 `WebSocket reconnecting` 和 `WebSocket reconnected`。
+运行期间如果网络中断，官方 SDK 会尝试重新连接，并输出 `WebSocket reconnecting` 和 `WebSocket reconnected`。重连成功后，插件会按 `$DSH_HOME/state/dsh-lark/message-sync.json` 中的会话游标调用历史消息接口补拉断线窗口，补拉结果经过与实时消息相同的昵称解析、附件落盘和持久化收件箱。首次发现的群只回看最近 30 分钟；单聊需要至少成功收到过一条实时消息后才能登记会话，因为飞书的机器人群列表接口不返回单聊。
 
 ## 验证对话
 
@@ -337,10 +341,10 @@ dmMode: disabled
 - Session 会挂载所选 Agent Preset，并在能匹配注册 Workspace 时关联到该 Workspace。
 - 飞书 SDK 会对同一聊天中的事件串行处理，避免两个 Agent turn 同时修改同一会话。
 - 重复事件会在 SDK 的去重窗口内被忽略。
-- 超过五分钟的延迟事件不会当作新消息处理。
+- 实时长连接中超过五分钟的延迟事件不会当作新消息处理；断线补拉按持久化游标处理，不受这个实时事件窗口限制。
 - 每次 Agent turn 结束后，插件会要求 Harness 刷新 Session 存储。
 - 回复只读取当前消息之后产生的 assistant 文本，不会误发上一轮回答。
-- 未完成消息和十二小时内的完成 ID 存放在 `$DSH_HOME/state/dsh-lark/inbox.json`，文件权限为 `0600`。
+- 未完成消息和十二小时内的完成 ID 存放在 `$DSH_HOME/state/dsh-lark/inbox.json`，补拉游标存放在同目录的 `message-sync.json`，文件权限均为 `0600`。
 - 插件不包含 cron 或定时复盘；主动消息由其他 Harness 插件通过 `larkDelivery` 触发。
 
 ## 安全说明
