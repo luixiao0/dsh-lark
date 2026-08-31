@@ -32,6 +32,11 @@ export interface IdentityMapping {
   linearEmail?: string
 }
 
+export interface ResolvedFeishuMentions {
+  text: string
+  mentions: Array<{ key: string; openId: string; name: string }>
+}
+
 interface IdentityMapDocument { version: 1; users: IdentityMapping[] }
 
 export class IdentityMap {
@@ -63,6 +68,38 @@ export class IdentityMap {
     return matches[0]
   }
 
+  async resolveMentions(text: string): Promise<ResolvedFeishuMentions> {
+    const document = await this.read()
+    const candidates = new Map<string, IdentityMapping | undefined>()
+    for (const item of document.users) {
+      for (const key of recipientKeys(item)) {
+        const normalized = key.toLocaleLowerCase()
+        if (!candidates.has(normalized)) candidates.set(normalized, item)
+        else if (candidates.get(normalized)?.feishuOpenId !== item.feishuOpenId) candidates.set(normalized, undefined)
+      }
+    }
+
+    let resolvedText = text
+    const mentions = new Map<string, { key: string; openId: string; name: string }>()
+    const uniqueCandidates = [...candidates.entries()]
+      .filter((entry): entry is [string, IdentityMapping] => entry[1] !== undefined)
+      .sort(([left], [right]) => right.length - left.length)
+    for (const [key, item] of uniqueCandidates) {
+      const suffix = /[a-z0-9_.-]$/iu.test(key) ? '(?![a-z0-9_.-])' : ''
+      const pattern = new RegExp(`(?<![a-z0-9._%+-])@${escapeRegExp(key)}${suffix}`, 'giu')
+      if (!pattern.test(resolvedText)) continue
+      pattern.lastIndex = 0
+      const mention = mentions.get(item.feishuOpenId) ?? {
+        key: `@_dsh_user_${mentions.size + 1}`,
+        openId: item.feishuOpenId,
+        name: item.name?.trim() || key,
+      }
+      mentions.set(item.feishuOpenId, mention)
+      resolvedText = resolvedText.replace(pattern, mention.key)
+    }
+    return { text: resolvedText, mentions: [...mentions.values()] }
+  }
+
   private async read(): Promise<IdentityMapDocument> {
     try {
       const value = JSON.parse(await readFile(this.path, 'utf8')) as Partial<IdentityMapDocument>
@@ -88,6 +125,10 @@ function recipientKeys(item: IdentityMapping): string[] {
     item.linearDisplayName,
     ...(item.aliases ?? []),
   ].flatMap(value => typeof value === 'string' && value.trim() !== '' ? [value.trim()] : [])
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 }
 
 export interface HulyEventClientOptions {

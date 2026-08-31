@@ -31,6 +31,9 @@ copy it into that workspace.
 - `feishu_send_message` is the Agent-facing proactive DM tool. Resolve its
   recipient from a literal `open_id` or one exact identity-map key; never use
   fuzzy name matching, and fail when an explicit key matches multiple people.
+- Group output converts `@<exact identity-map key>` to a native Feishu mention.
+  Ambiguous or unknown targets remain plain text so the bot never mentions the
+  wrong person.
 - `larkDelivery` may send to any `open_id`; a non-empty `groupAllowlist` still
   constrains explicit group targets for deployments that choose one.
 - Do not add cron or periodic monitoring. Proactive delivery is event-driven.

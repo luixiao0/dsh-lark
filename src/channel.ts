@@ -101,6 +101,21 @@ export async function startChannel(
   const identityMap = new IdentityMap(config.identityMapFile || undefined)
   const senderNames = new Map<string, string>()
 
+  const sendMessage = async (
+    chatId: string,
+    content: Parameters<LarkChannel['send']>[1],
+    options?: Parameters<LarkChannel['send']>[2],
+  ): Promise<SendResult> => {
+    const value = 'text' in content
+      ? content.text
+      : 'markdown' in content && typeof content.markdown === 'string' ? content.markdown : undefined
+    if (!chatId.startsWith('oc_') || value === undefined) return channel.send(chatId, content, options)
+    const resolved = await identityMap.resolveMentions(value)
+    const resolvedContent = 'text' in content ? { text: resolved.text } : { markdown: resolved.text }
+    const mentions = [...(options?.mentions ?? []), ...resolved.mentions]
+    return channel.send(chatId, resolvedContent, mentions.length === 0 ? options : { ...options, mentions })
+  }
+
   const enrichSenderName = async (message: NormalizedMessage): Promise<NormalizedMessage> => {
     if (message.senderName?.trim()) return message
     let name = senderNames.get(message.senderId)
@@ -164,7 +179,7 @@ export async function startChannel(
       let deliveryChatId = latest.chatId
       if (text !== '' && text !== config.silentReplyToken) {
         try {
-          sent.push(await channel.send(deliveryChatId, { markdown: text }, hulyEvent === undefined ? {
+          sent.push(await sendMessage(deliveryChatId, { markdown: text }, hulyEvent === undefined ? {
             replyTo: latest.messageId,
             replyInThread: latest.threadId !== undefined,
           } : undefined))
@@ -172,7 +187,7 @@ export async function startChannel(
           if (hulyEvent === undefined || !latest.chatId.startsWith('ou_') || config.fallbackChatId === '') throw error
           const key = '@_user_1'
           deliveryChatId = config.fallbackChatId
-          sent.push(await channel.send(deliveryChatId, { text: `${key}\n${text}` }, {
+          sent.push(await sendMessage(deliveryChatId, { text: `${key}\n${text}` }, {
             mentions: [{ key, openId: latest.chatId, name: hulyEvent.recipient.name ?? '成员' }],
           }))
         }
@@ -205,7 +220,7 @@ export async function startChannel(
         return
       }
       try {
-        await channel.send(latest.chatId, { text: config.errorMessage }, {
+        await sendMessage(latest.chatId, { text: config.errorMessage }, {
           replyTo: latest.messageId,
           replyInThread: latest.threadId !== undefined,
         })
@@ -421,15 +436,15 @@ export async function startChannel(
       if (hasText === hasMarkdown) throw new TypeError('provide exactly one non-empty text or markdown value')
       try {
         return hasText
-          ? await channel.send(chatId, { text: message.text! })
-          : await channel.send(chatId, { markdown: message.markdown! })
+          ? await sendMessage(chatId, { text: message.text! })
+          : await sendMessage(chatId, { markdown: message.markdown! })
       } catch (error) {
         const mention = message.fallbackMention
         const fallbackChatId = config.fallbackChatId || config.homeChatId
         if (!chatId.startsWith('ou_') || mention === undefined || mention.openId !== chatId || fallbackChatId === '') throw error
         if (config.groupAllowlist.length > 0 && !config.groupAllowlist.includes(fallbackChatId)) throw error
         const key = '@_user_1'
-        return channel.send(fallbackChatId, { text: `${key}\n${message.text ?? message.markdown!}` }, {
+        return sendMessage(fallbackChatId, { text: `${key}\n${message.text ?? message.markdown!}` }, {
           mentions: [{ key, openId: mention.openId, name: mention.name }],
         })
       }

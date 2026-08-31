@@ -4,6 +4,8 @@
 
 - Expose `feishu_send_message` to Agents for proactive direct messages using
   explicit identity-map resolution, with main-group mention fallback.
+- Convert exact, unique identity-map references in group output to native
+  Feishu mentions instead of displaying inert `@name` text.
 
 ## 0.2.2-squady.1
 

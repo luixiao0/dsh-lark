@@ -19,6 +19,7 @@
 - 收件箱和完成去重状态持久化到 `$DSH_HOME/state/dsh-lark/`。
 - 向其他 Harness 插件提供受群白名单限制的 `larkDelivery` 主动发送 Service。
 - 向 Agent 提供 `feishu_send_message` 工具，按显式身份映射主动私聊成员；私聊失败时回退到主群 @本人。
+- 群聊出站文本中的 `@身份映射键` 会转换为飞书原生 @；未知或重名目标保持普通文本。
 - 可以沿用 Harness 默认模型，也可以为飞书渠道指定模型。
 - 会话标识经过 SHA-256 处理，不会把原始 `chat_id` 写进 Session ID。
 - Harness 内部错误不会直接发送给飞书用户。
