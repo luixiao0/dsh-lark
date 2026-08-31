@@ -31,6 +31,9 @@ copy it into that workspace.
 - `feishu_send_message` is the Agent-facing proactive DM tool. Resolve its
   recipient from a literal `open_id` or one exact identity-map key; never use
   fuzzy name matching, and fail when an explicit key matches multiple people.
+- Register Agent tools against the Harness-provided `tools` service with a
+  standard JSON Schema definition. Do not import another `dsh-tools` runtime
+  into this locally linked plugin; its versioned peer graph belongs to the host.
 - Group output converts `@<exact identity-map key>` to a native Feishu mention.
   Ambiguous or unknown targets remain plain text so the bot never mentions the
   wrong person.

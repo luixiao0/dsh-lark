@@ -4,7 +4,6 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -25,9 +24,23 @@ export interface LarkDeliveryService {
   send(message: OutboundMessage): ReturnType<LarkRuntime['send']>
 }
 
+interface LarkToolRegistry {
+  register(definition: {
+    name: string
+    description: string
+    parameters: Record<string, unknown>
+    output: {
+      schema: Record<string, unknown>
+      render(args: unknown, value: unknown): Array<{ type: 'text'; text: string }>
+    }
+    execute(args: unknown): Promise<unknown>
+  }): () => void
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     larkDelivery: LarkDeliveryService
+    tools: LarkToolRegistry
   }
 }
 
@@ -91,20 +104,23 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
     send: (message: OutboundMessage) => runtime.send(message),
   }
   ctx.provide('larkDelivery', delivery)
-  ctx.effect(() => tools.register(defineTool({
+  ctx.effect(() => tools.register({
     name: 'feishu_send_message',
     description: 'Send a proactive Feishu direct message to a person. Resolve the recipient only from an explicit Feishu open_id or the protected identity map. If Feishu rejects the direct message, notify the same person by mentioning them in the configured fallback group.',
     parameters: {
-      recipient: {
-        type: 'string',
-        required: true,
-        description: 'Feishu open_id, mapped Huly account/person ID, mapped Linear user ID/email, or an exact unique mapped name/alias.',
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        recipient: {
+          type: 'string',
+          description: 'Feishu open_id, mapped Huly account/person ID, mapped Linear user ID/email, or an exact unique mapped name/alias.',
+        },
+        message: {
+          type: 'string',
+          description: 'Non-empty message to deliver. Feishu markdown is supported.',
+        },
       },
-      message: {
-        type: 'string',
-        required: true,
-        description: 'Non-empty message to deliver. Feishu markdown is supported.',
-      },
+      required: ['recipient', 'message'],
     },
     output: {
       schema: {
@@ -120,8 +136,10 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
     },
     async execute(args) {
-      const recipientInput = args.recipient.trim()
-      const message = args.message.trim()
+      const input = args as { recipient?: unknown; message?: unknown }
+      if (typeof input.recipient !== 'string' || typeof input.message !== 'string') throw new TypeError('Feishu recipient and message are required')
+      const recipientInput = input.recipient.trim()
+      const message = input.message.trim()
       if (message === '') throw new TypeError('Feishu message must not be empty')
       const identityMap = new IdentityMap(currentSettings().identityMapFile || undefined)
       const recipient = await identityMap.resolveRecipient(recipientInput)
@@ -140,7 +158,7 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
         recipientName,
       }
     },
-  })), 'dsh-lark: proactive Feishu direct-message tool')
+  }), 'dsh-lark: proactive Feishu direct-message tool')
 
   const api = createSettingsApi({
     getSettings: currentSettings,
