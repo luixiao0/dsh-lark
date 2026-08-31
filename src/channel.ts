@@ -4,9 +4,10 @@ import type { RuntimeConfig } from './config.ts'
 import type { HarnessConversationService } from './harness.ts'
 import type { MessageInbox } from './inbox.ts'
 import { ConversationMessageBatcher, formatLocalTime, isAmbientGroupBatch, toAgentMessage } from './message-batcher.ts'
-import type { TimerScheduler } from './message-batcher.ts'
+import type { ContextualNormalizedMessage, QuotedFeishuMessage, TimerScheduler } from './message-batcher.ts'
 import { basename } from 'node:path'
 import { downloadMessageResources, extractFileDeliveries } from './attachments.ts'
+import type { LocalResource } from './attachments.ts'
 import { HulyEventClient, IdentityMap, hulyEventOf } from './huly-events.ts'
 import { ReplyBindingStore } from './reply-bindings.ts'
 import { PersistentMessageSyncState } from './message-sync-state.ts'
@@ -32,10 +33,44 @@ interface HistoricalMessageItem {
     id_type: string
     sender_type: string
     sender_name?: string
+    sender_i18n_names?: Record<string, string>
     open_bot_id?: string
   }
   body?: { content: string }
   mentions?: Array<{ key: string, id: string, id_type: string, name: string, tenant_key?: string }>
+}
+
+function interactiveCardText(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined
+  let card: unknown
+  try {
+    card = JSON.parse(raw)
+    if (isRecord(card) && typeof card.json_card === 'string') card = JSON.parse(card.json_card)
+  } catch {
+    return undefined
+  }
+  const values: string[] = []
+  collectCardText(card, values)
+  const unique = values
+    .map(value => value.trim())
+    .filter((value, index, all) => value !== '' && all.indexOf(value) === index)
+  return unique.length === 0 ? undefined : unique.join('\n').slice(0, 24_000)
+}
+
+function collectCardText(value: unknown, output: string[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectCardText(item, output)
+    return
+  }
+  if (!isRecord(value)) return
+  if (typeof value.content === 'string') output.push(value.content)
+  for (const [key, child] of Object.entries(value)) {
+    if (key !== 'content') collectCardText(child, output)
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export type ChannelFactory = (options: LarkChannelOptions) => LarkChannel
@@ -115,7 +150,7 @@ export interface StartChannelDependencies {
 
 export async function startChannel(
   config: Omit<RuntimeConfig, 'appSecretRef'>,
-  bridge: Pick<HarnessConversationService, 'reply' | 'dispose'>,
+  bridge: Pick<HarnessConversationService, 'reply' | 'dispose'> & Partial<Pick<HarnessConversationService, 'recoverInterruptedBackgroundWork'>>,
   dependencies: StartChannelDependencies,
 ): Promise<ActiveLarkChannel> {
   const factory = dependencies.factory ?? createLarkChannel
@@ -152,6 +187,14 @@ export async function startChannel(
   const senderNames = new Map<string, string>()
   const observedGroupMembers = new Map<string, Map<string, string>>()
   const groupDirectoryCheckedAt = new Map<string, number>()
+  const fetchMessageItem = async (messageId: string): Promise<HistoricalMessageItem | undefined> => {
+    const response = await channel.rawClient.im.v1.message.get({
+      path: { message_id: messageId },
+      params: { with_sender_name: true, card_msg_content_type: 'raw_card_content' },
+    })
+    if (response.code !== undefined && response.code !== 0) throw new Error(`${response.code}: ${response.msg ?? 'message request failed'}`)
+    return response.data?.items?.[0] as HistoricalMessageItem | undefined
+  }
 
   const rememberGroupMember = (chatId: string, openId: string, name: string | undefined) => {
     if (!chatId.startsWith('oc_') || !openId.startsWith('ou_') || !name?.trim()) return
@@ -246,6 +289,37 @@ export async function startChannel(
     return { ...message, senderName: name }
   }
 
+  const historicalSenderName = (item: HistoricalMessageItem): string | undefined => (
+    item.sender?.sender_name?.trim()
+    || item.sender?.sender_i18n_names?.zh_cn?.trim()
+    || item.sender?.sender_i18n_names?.en_us?.trim()
+    || Object.values(item.sender?.sender_i18n_names ?? {}).find(value => value.trim())?.trim()
+  )
+
+  const applyHistoricalContent = (message: NormalizedMessage, item: HistoricalMessageItem): NormalizedMessage => {
+    const appSender = item.sender?.sender_type.toLowerCase() === 'app'
+    const senderId = appSender ? item.sender?.open_bot_id || item.sender?.id || message.senderId : message.senderId
+    const senderName = historicalSenderName(item) || message.senderName
+    const cardText = item.msg_type === 'interactive' ? interactiveCardText(item.body?.content) : undefined
+    return {
+      ...message,
+      senderId,
+      ...(senderName?.trim() ? { senderName: senderName.trim() } : {}),
+      ...(cardText === undefined ? {} : { content: cardText }),
+    }
+  }
+
+  const enrichLiveCard = async (message: NormalizedMessage): Promise<NormalizedMessage> => {
+    if (message.rawContentType !== 'interactive') return message
+    try {
+      const item = await fetchMessageItem(message.messageId)
+      return item === undefined ? message : applyHistoricalContent(message, item)
+    } catch (error) {
+      logger.warn(`dsh-lark: card content lookup failed for ${message.messageId}: ${error instanceof Error ? error.message : String(error)}`)
+      return message
+    }
+  }
+
   const handleBatch = async (messages: readonly NormalizedMessage[]) => {
     const latest = messages.at(-1)
     if (latest === undefined) return
@@ -331,15 +405,17 @@ export async function startChannel(
   )
 
   const acceptFeishuMessage = async (message: NormalizedMessage) => {
-    const named = await enrichSenderName(message)
+    const card = await enrichLiveCard(message)
+    const named = await enrichSenderName(card)
     const durable = await downloadMessageResources(channel, named)
-    const accepted = await dependencies.inbox.accept(durable)
+    const contextual = await hydrateReplyContext(durable)
+    const accepted = await dependencies.inbox.accept(contextual)
     try {
-      await messageSync.remember(durable)
+      await messageSync.remember(contextual)
     } catch (error) {
-      logger.warn(`dsh-lark: message sync checkpoint failed for ${durable.chatId}: ${error instanceof Error ? error.message : String(error)}`)
+      logger.warn(`dsh-lark: message sync checkpoint failed for ${contextual.chatId}: ${error instanceof Error ? error.message : String(error)}`)
     }
-    if (accepted) batcher.push(durable)
+    if (accepted) batcher.push(contextual)
   }
 
   const isAllowedHistoricalMessage = (message: NormalizedMessage): boolean => {
@@ -394,14 +470,53 @@ export async function startChannel(
     item.sender.id === config.appId || item.sender.open_bot_id === channel.botIdentity?.openId
   )
 
+  const normalizeHistoricalMessage = async (
+    item: HistoricalMessageItem,
+    chatId: string,
+    chatType: FeishuChatType,
+    download = false,
+  ): Promise<NormalizedMessage | undefined> => {
+    const raw = rawHistoricalEvent(item, chatId, chatType)
+    if (raw === undefined || channel.botIdentity === undefined) return undefined
+    let normalized = applyHistoricalContent(await normalize(raw, { botIdentity: channel.botIdentity }), item)
+    normalized = await enrichSenderName(normalized)
+    return download ? downloadMessageResources(channel, normalized) : normalized
+  }
+
+  async function hydrateReplyContext(message: NormalizedMessage): Promise<NormalizedMessage> {
+    if (message.replyToMessageId === undefined) return message
+    try {
+      const item = await fetchMessageItem(message.replyToMessageId)
+      if (item === undefined || item.chat_id === undefined) return message
+      const mode = await channel.getChatMode(item.chat_id)
+      const quoted = await normalizeHistoricalMessage(item, item.chat_id, mode === 'p2p' ? 'p2p' : 'group', true)
+      if (quoted === undefined) return message
+      const quotedResources = quoted.resources as LocalResource[]
+      const directResources = message.resources as LocalResource[]
+      const resources = [...directResources]
+      const seen = new Set(directResources.map(resource => resource.fileKey))
+      for (const resource of quotedResources) {
+        if (!seen.has(resource.fileKey)) resources.push(resource)
+        seen.add(resource.fileKey)
+      }
+      const quotedMessage: QuotedFeishuMessage = {
+        messageId: quoted.messageId,
+        senderId: quoted.senderId,
+        senderName: quoted.senderName?.trim() || `Feishu user (${quoted.senderId})`,
+        sentAt: formatLocalTime(quoted.createTime),
+        text: quoted.content,
+        resources: quotedResources,
+      }
+      return { ...message, resources, quotedMessage } as ContextualNormalizedMessage
+    } catch (error) {
+      logger.warn(`dsh-lark: quoted message lookup failed for ${message.replyToMessageId}: ${error instanceof Error ? error.message : String(error)}`)
+      return message
+    }
+  }
+
   const messageRecord = async (item: HistoricalMessageItem, chatId: string, chatType: FeishuChatType, download = false): Promise<FeishuMessageRecord | undefined> => {
     if (!item.message_id || item.sender === undefined) return undefined
-    let normalized: NormalizedMessage | undefined
-    const raw = rawHistoricalEvent(item, chatId, chatType)
-    if (raw !== undefined && channel.botIdentity !== undefined) {
-      normalized = await enrichSenderName(await normalize(raw, { botIdentity: channel.botIdentity }))
-      if (download) normalized = await downloadMessageResources(channel, normalized)
-    }
+    const normalized = await normalizeHistoricalMessage(item, chatId, chatType, download)
     const senderId = normalized?.senderId || item.sender.open_bot_id || item.sender.id
     return {
       messageId: item.message_id,
@@ -443,17 +558,18 @@ export async function startChannel(
           sort_type: 'ByCreateTimeAsc',
           page_size: 50,
           with_sender_name: true,
+          card_msg_content_type: 'raw_card_content',
           ...(pageToken === undefined ? {} : { page_token: pageToken }),
         },
       })
       if (response.code !== undefined && response.code !== 0) throw new Error(`${response.code}: ${response.msg ?? 'history request failed'}`)
       for (const item of response.data?.items ?? []) {
         const historical = item as HistoricalMessageItem
-        if (historical.sender?.id && historical.sender.sender_name) rememberGroupMember(chatId, historical.sender.id, historical.sender.sender_name)
+        const senderName = historicalSenderName(historical)
+        if (historical.sender?.id && senderName) rememberGroupMember(chatId, historical.sender.id, senderName)
         if (isOwnHistoricalMessage(historical)) continue
-        const raw = rawHistoricalEvent(historical, chatId, chatType)
-        if (raw === undefined) continue
-        const message = await normalize(raw, { botIdentity })
+        const message = await normalizeHistoricalMessage(historical, chatId, chatType)
+        if (message === undefined) continue
         if (!isAllowedHistoricalMessage(message)) continue
         await acceptFeishuMessage(message)
         recovered += 1
@@ -563,6 +679,17 @@ export async function startChannel(
     throw error
   }
   logger.info('dsh-lark: WebSocket connected')
+  void bridge.recoverInterruptedBackgroundWork?.(async result => {
+    const mention = result.chatType === 'group' && result.requesterName?.trim()
+      ? `@${result.requesterName.trim()} `
+      : ''
+    await sendMessage(result.chatId, { markdown: `${mention}${result.text}` }, result.messageId === undefined ? undefined : {
+      replyTo: result.messageId,
+      replyInThread: result.threadId !== undefined,
+    }, result.chatType === 'group')
+  }).catch(error => {
+    logger.warn(`dsh-lark: interrupted background recovery failed: ${error instanceof Error ? error.message : String(error)}`)
+  })
   const hulyEvents = config.hulyEventsUrl === '' ? undefined : new HulyEventClient({
     url: config.hulyEventsUrl,
     secret: config.hulyEventsSecret,

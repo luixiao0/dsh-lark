@@ -2,6 +2,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { AttachmentStore, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { readFile } from 'node:fs/promises'
 import type { LocalResource } from './attachments.ts'
 import { conversationKey, summarizeTurn, toSessionId } from './conversation.ts'
@@ -29,7 +30,10 @@ export interface HarnessDependencies {
     get: (id: ReturnType<typeof toSessionId>) => AgentLike | undefined
   }
   sessions: { flush(session: AgentLike['session']): Promise<unknown> }
-  sessionPersistence: { list(): Promise<Array<{ id: string }>> }
+  sessionPersistence: {
+    list(): Promise<SessionHeader[]>
+    inspect?(id: SessionId): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>
+  }
   selection(): { provider: string; model: string }
   agentPresets: {
     resolve(id?: string): Promise<{ id: string }>
@@ -54,8 +58,27 @@ export interface InboundMessage extends ConversationMessage {
   resources?: readonly LocalResource[]
 }
 
+export interface BackgroundWorkDelivery {
+  chatId: string
+  chatType: 'p2p' | 'group'
+  messageId?: string
+  threadId?: string
+  requesterName?: string
+  text: string
+}
+
+interface BackgroundWorkOrigin {
+  chatId: string
+  chatType: 'p2p' | 'group'
+  messageId?: string
+  threadId?: string
+  requesterName?: string
+  requesterId?: string
+}
+
 export class HarnessConversationService {
   private readonly handles = new Map<string, Promise<AgentHandleLike>>()
+  private readonly recoveryHandles = new Set<AgentHandleLike>()
 
   constructor(private readonly deps: HarnessDependencies, private readonly config: HarnessBridgeConfig) {}
 
@@ -91,10 +114,38 @@ export class HarnessConversationService {
     return result.text
   }
 
+  async recoverInterruptedBackgroundWork(deliver: (result: BackgroundWorkDelivery) => Promise<void>): Promise<void> {
+    const inspect = this.deps.sessionPersistence.inspect
+    if (inspect === undefined) return
+    const headers = await this.deps.sessionPersistence.list()
+    for (const header of headers) {
+      if (header.origin !== 'subagent') continue
+      let origin: BackgroundWorkOrigin | undefined
+      try {
+        const inspected = await inspect.call(this.deps.sessionPersistence, header.id)
+        const lastTurnEnd = inspected.events.findLast(event => event.type === 'turn/end')
+        if (lastTurnEnd?.type !== 'turn/end' || lastTurnEnd.data.reason.kind !== 'interrupted') continue
+        origin = backgroundWorkOrigin(inspected.events)
+        if (origin === undefined) continue
+        await this.resumeInterruptedBackgroundWork(header, inspected.events, origin, deliver)
+      } catch (error) {
+        if (origin === undefined) continue
+        await deliver({
+          ...origin,
+          text: `后台任务在断线恢复时失败：${error instanceof Error ? error.message : String(error)}`,
+        })
+      }
+    }
+  }
+
   async dispose(): Promise<void> {
     const handles = await Promise.allSettled(this.handles.values())
-    await Promise.all(handles.flatMap(result => result.status === 'fulfilled' ? [result.value.dispose()] : []))
+    await Promise.all([
+      ...handles.flatMap(result => result.status === 'fulfilled' ? [result.value.dispose()] : []),
+      ...[...this.recoveryHandles].map(handle => handle.dispose()),
+    ])
     this.handles.clear()
+    this.recoveryHandles.clear()
   }
 
   private getOrCreate(key: string): Promise<AgentHandleLike> {
@@ -145,6 +196,82 @@ export class HarnessConversationService {
     }
     return handle
   }
+
+  private async resumeInterruptedBackgroundWork(
+    header: SessionHeader,
+    inspectedEvents: readonly SessionEvent[],
+    origin: BackgroundWorkOrigin,
+    deliver: (result: BackgroundWorkDelivery) => Promise<void>,
+  ): Promise<void> {
+    const fallback = this.deps.selection()
+    const selection = {
+      provider: this.config.provider ?? fallback.provider,
+      model: this.config.model ?? fallback.model,
+    }
+    const agentPreset = (await this.deps.agentPresets.resolve(header.agentPreset ?? this.config.agentPreset)).id
+    const setup = async (agentCtx: Parameters<typeof installModelSelection>[0]) => {
+      installModelSelection(agentCtx, { current: selection, assembled: undefined })
+      await this.deps.agentPresets.mount(agentCtx, agentPreset)
+    }
+    const handle = await this.deps.agents.resume({ resumeSessionId: header.id, agentOptions: selection, setup })
+    this.recoveryHandles.add(handle)
+    try {
+      const workspacePath = header.cwd ?? this.config.workspace
+      const workspace = workspacePath === undefined
+        ? this.deps.workspaceRegistry.list()[0]
+        : await this.deps.workspaceRegistry.resolveByPath(workspacePath)
+      await workspace?.attachSession(header.id)
+      const agent = handle.agent
+      await agent.whenIdle()
+      const firstSeq = Math.max(agent.session.seq, inspectedEvents.length)
+      agent.followup(createUserMessage({
+        content: [{
+          type: 'text',
+          text: '上一轮后台执行因进程退出而中断。继续原任务；任何有副作用的操作都先核对外部当前状态，避免重复执行。不要调用 feishu_send_message，最终结果由恢复器回传。',
+        }],
+        source: { kind: 'user' },
+      }))
+      await agent.whenIdle()
+      await this.deps.sessions.flush(agent.session)
+      const result = summarizeTurn(agent.session.events, firstSeq)
+      await deliver({
+        ...origin,
+        text: result.ok ? result.text : '后台任务已恢复执行，但没有产生可交付的最终结果。',
+      })
+    } finally {
+      this.recoveryHandles.delete(handle)
+      await handle.dispose()
+    }
+  }
+}
+
+function backgroundWorkOrigin(events: readonly SessionEvent[]): BackgroundWorkOrigin | undefined {
+  const marker = /^DSH_FEISHU_BACKGROUND:(\{[^\n]+\})$/mu
+  for (const event of events) {
+    if (event.type !== 'user/message') continue
+    const text = event.data.content
+      .filter(block => block.type === 'text')
+      .map(block => block.text)
+      .join('\n')
+    const payload = marker.exec(text)?.[1]
+    if (payload === undefined) continue
+    try {
+      const value = JSON.parse(payload) as Record<string, unknown>
+      if (typeof value.chatId !== 'string' || value.chatId.trim() === '') return undefined
+      if (value.chatType !== 'p2p' && value.chatType !== 'group') return undefined
+      return {
+        chatId: value.chatId,
+        chatType: value.chatType,
+        ...(typeof value.messageId === 'string' && value.messageId !== '' ? { messageId: value.messageId } : {}),
+        ...(typeof value.threadId === 'string' && value.threadId !== '' ? { threadId: value.threadId } : {}),
+        ...(typeof value.requesterName === 'string' && value.requesterName !== '' ? { requesterName: value.requesterName } : {}),
+        ...(typeof value.requesterId === 'string' && value.requesterId !== '' ? { requesterId: value.requesterId } : {}),
+      }
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
 }
 
 function detectImageMediaType(data: Uint8Array): ImageMediaType {

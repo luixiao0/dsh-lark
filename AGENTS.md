@@ -27,6 +27,13 @@ copy it into that workspace.
   WebSocket reconnection alone does not recover missed events.
 - Download inbound Feishu resources before the Agent turn. File delivery from
   the Agent uses exact `DSH_FEISHU_FILE:/absolute/path` response lines.
+- A reply must be hydrated from Feishu before persistence. Put the quoted
+  sender, parsed current text, and local resources in `quotedMessage`, and also
+  pass quoted images to Harness as native image blocks. This is how a reply can
+  expose an app-bot card even when Feishu omitted the original message event.
+- Request `raw_card_content` for message reads and history catch-up. App-bot
+  interactive cards use a nested `json_card`; parse its textual `content`
+  fields and retain Feishu's `sender_name` instead of emitting a generic card.
 - Commit downloaded images to Harness attachment storage and include native
   image blocks in the same user turn. A local path is operational context, not
   a substitute for model image input.
@@ -41,6 +48,10 @@ copy it into that workspace.
   It also accepts an exact envelope `chat_id` so background work can report
   back to the originating group or direct chat without another delivery
   service.
+- Continuable Feishu subagents start with a `DSH_FEISHU_BACKGROUND:` routing
+  marker. On startup, resume only children whose latest durable turn ended as
+  `interrupted`; verify side effects before retrying and deliver their final
+  result through the channel. A later completed turn makes recovery idempotent.
 - Register Agent tools against the Harness-provided `tools` service with a
   standard JSON Schema definition. Do not import another `dsh-tools` runtime
   into this locally linked plugin; its versioned peer graph belongs to the host.

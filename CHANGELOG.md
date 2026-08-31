@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Parse app-bot interactive cards and preserve their Feishu sender names in
+  incoming, history, and explicit message reads.
+- Hydrate replies with the quoted sender, current text, and downloaded
+  resources; quoted images now reach Harness as native image input.
+- Resume marked continuable Feishu subagents after an interrupted final turn
+  and route the recovered result back to its originating message.
+
 - Deliver downloaded Feishu images to Harness as durable native image blocks
   in the same turn instead of exposing only a local filesystem path.
 - Preserve historical messages from other applications when Feishu exposes

@@ -7,6 +7,17 @@ const MAX_BATCH_MESSAGES = 20
 const MAX_BATCH_CHARS = 8000
 const AGENT_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 
+export interface QuotedFeishuMessage {
+  messageId: string
+  senderId: string
+  senderName: string
+  sentAt: string
+  text: string
+  resources: LocalResource[]
+}
+
+export type ContextualNormalizedMessage = NormalizedMessage & { quotedMessage?: QuotedFeishuMessage }
+
 export interface TimerScheduler {
   timeout(callback: () => void, delayMs: number): () => void
 }
@@ -90,22 +101,42 @@ export function toAgentMessage(messages: readonly NormalizedMessage[], replyBind
   const mode = latest.rawContentType === HULY_EVENT_CONTENT_TYPE
     ? 'huly'
     : isAmbientGroupBatch(messages) ? 'ambient' : 'request'
-  const entries = messages.map(message => JSON.stringify({
-    messageId: message.messageId,
-    senderId: message.senderId,
-    senderName: message.senderName?.trim() || `Feishu user (${message.senderId})`,
-    sentAt: formatLocalTime(message.createTime),
-    text: message.content,
-    resources: (message.resources as LocalResource[]).map(resource => ({
-      type: resource.type,
-      fileName: resource.fileName,
-      localPath: resource.localPath,
-    })),
-    replyToMessageId: message.replyToMessageId,
-    replyBinding: message.replyToMessageId === undefined ? undefined : replyBindings.get(message.replyToMessageId),
-  })).join('\n')
+  const entries = messages.map(message => {
+    const contextual = message as ContextualNormalizedMessage
+    const quotedKeys = new Set(contextual.quotedMessage?.resources.map(resource => resource.fileKey) ?? [])
+    const directResources = (message.resources as LocalResource[]).filter(resource => !quotedKeys.has(resource.fileKey))
+    return JSON.stringify({
+      messageId: message.messageId,
+      senderId: message.senderId,
+      senderName: message.senderName?.trim() || `Feishu user (${message.senderId})`,
+      sentAt: formatLocalTime(message.createTime),
+      text: message.content,
+      resources: directResources.map(resource => ({
+        type: resource.type,
+        fileName: resource.fileName,
+        localPath: resource.localPath,
+      })),
+      quotedMessage: contextual.quotedMessage === undefined ? undefined : {
+        messageId: contextual.quotedMessage.messageId,
+        senderId: contextual.quotedMessage.senderId,
+        senderName: contextual.quotedMessage.senderName,
+        sentAt: contextual.quotedMessage.sentAt,
+        text: contextual.quotedMessage.text,
+        resources: contextual.quotedMessage.resources.map(resource => ({
+          type: resource.type,
+          fileName: resource.fileName,
+          localPath: resource.localPath,
+        })),
+      },
+      replyToMessageId: message.replyToMessageId,
+      replyBinding: message.replyToMessageId === undefined ? undefined : replyBindings.get(message.replyToMessageId),
+    })
+  }).join('\n')
+  const resources = messages.flatMap(message => message.resources as LocalResource[])
+    .filter((resource, index, all) => all.findIndex(item => item.fileKey === resource.fileKey) === index)
   return {
     ...latest,
+    resources,
     content: `<feishu_messages mode=${JSON.stringify(mode)} chat_id=${JSON.stringify(latest.chatId)} chat_type=${JSON.stringify(latest.chatType)} thread_id=${JSON.stringify(latest.threadId ?? '')} timezone=${JSON.stringify(AGENT_TIME_ZONE)} current_time=${JSON.stringify(formatLocalTime(Date.now()))}>\n${entries}\n</feishu_messages>`,
   }
 }
