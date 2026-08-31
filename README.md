@@ -357,6 +357,8 @@ Agent 实际只接收规范化后的文本包，不接收飞书 SDK 原始事件
 
 `mentionedBot`、`rawContentType` 和内部 `createdAt` 不进入 Agent 上下文；明确请求、群内旁听和 Huly 事件只通过根节点的 `mode` 表达。昵称优先来自事件、群成员列表、身份映射和通讯录；都不可用时使用包含稳定 `open_id` 的占位名，确保多人对话仍可区分。
 
+规范化格式使用 `lark-v3-*` Session 命名空间。升级时不改写或删除旧的压缩会话；后续消息从干净的 v3 上下文开始并继续持久化，旧 v2 文件只保留作回退。
+
 ## 安全说明
 
 - App Secret 只应存在于 Harness Credentials、启动环境变量或外部 Secret Manager 中。

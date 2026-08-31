@@ -19,9 +19,9 @@ export function conversationKey(message: ConversationMessage): string {
 
 export function toSessionId(domain: DomainName, key: string): SessionId {
   const digest = createHash('sha256').update(`${domain}\0${key}`).digest('hex').slice(0, 40)
-  // v2 sessions include the Harness workspace and agent-preset composition.
-  // Keep them separate from sessions created by releases that lacked it.
-  return SessionId(`lark-v2-${digest}`)
+  // v3 starts with the normalized context envelope. Keep older sessions intact
+  // instead of rewriting compressed history that exposed internal SDK fields.
+  return SessionId(`lark-v3-${digest}`)
 }
 
 interface EventLike {
