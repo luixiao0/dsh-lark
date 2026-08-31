@@ -117,7 +117,7 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
   ctx.provide('larkDelivery', delivery)
   ctx.effect(() => tools.register({
     name: 'feishu_send_message',
-    description: 'Send a proactive Feishu direct message to a person. Resolve the recipient only from an explicit Feishu open_id or the protected identity map. If Feishu rejects the direct message, notify the same person by mentioning them in the configured fallback group.',
+    description: 'Send a proactive Feishu message either to one mapped person or to an exact chat_id from a Feishu envelope. Provide exactly one of recipient or chatId. If Feishu rejects a direct message, notify the same person by mentioning them in the configured fallback group.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -126,12 +126,16 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
           type: 'string',
           description: 'Feishu open_id, mapped Huly account/person ID, mapped Linear user ID/email, or an exact unique mapped name/alias.',
         },
+        chatId: {
+          type: 'string',
+          description: 'Exact Feishu chat_id from a received feishu_messages envelope. Use this for progress or final delivery back to the originating group or direct chat.',
+        },
         message: {
           type: 'string',
           description: 'Non-empty message to deliver. Feishu markdown is supported.',
         },
       },
-      required: ['recipient', 'message'],
+      required: ['message'],
     },
     output: {
       schema: {
@@ -139,19 +143,28 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
         additionalProperties: false,
         properties: {
           messageId: { type: 'string' },
-          recipientOpenId: { type: 'string' },
-          recipientName: { type: 'string' },
+          targetId: { type: 'string' },
+          targetName: { type: 'string' },
         },
-        required: ['messageId', 'recipientOpenId', 'recipientName'],
+        required: ['messageId', 'targetId', 'targetName'],
       },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
     },
     async execute(args) {
-      const input = args as { recipient?: unknown; message?: unknown }
-      if (typeof input.recipient !== 'string' || typeof input.message !== 'string') throw new TypeError('Feishu recipient and message are required')
-      const recipientInput = input.recipient.trim()
+      const input = args as { recipient?: unknown; chatId?: unknown; message?: unknown }
+      if (typeof input.message !== 'string') throw new TypeError('Feishu message is required')
+      if (input.recipient !== undefined && typeof input.recipient !== 'string') throw new TypeError('Feishu recipient must be a string')
+      if (input.chatId !== undefined && typeof input.chatId !== 'string') throw new TypeError('Feishu chatId must be a string')
+      const recipientInput = input.recipient?.trim() ?? ''
+      const chatId = input.chatId?.trim() ?? ''
       const message = input.message.trim()
       if (message === '') throw new TypeError('Feishu message must not be empty')
+      if ((recipientInput === '') === (chatId === '')) throw new TypeError('Provide exactly one of Feishu recipient or chatId')
+      if (chatId !== '') {
+        if (!chatId.startsWith('oc_')) throw new TypeError('Feishu chatId must be an exact oc_ chat identifier from the message envelope')
+        const result = await runtime.send({ chatId, markdown: message })
+        return { messageId: result.messageId, targetId: chatId, targetName: 'Feishu chat' }
+      }
       const identityMap = new IdentityMap(currentSettings().identityMapFile || undefined)
       const recipient = await identityMap.resolveRecipient(recipientInput)
       if (recipient === undefined) {
@@ -165,8 +178,8 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
       })
       return {
         messageId: result.messageId,
-        recipientOpenId: recipient.feishuOpenId,
-        recipientName,
+        targetId: recipient.feishuOpenId,
+        targetName: recipientName,
       }
     },
   }), 'dsh-lark: proactive Feishu direct-message tool')

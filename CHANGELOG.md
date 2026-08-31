@@ -10,6 +10,8 @@
   and recall, and deliver Feishu recall events into the conversation.
 - Expose `feishu_send_message` to Agents for proactive direct messages using
   explicit identity-map resolution, with main-group mention fallback.
+- Let `feishu_send_message` target an exact inbound `chat_id`, allowing DSH
+  background subagents to return progress and results to the originating chat.
 - Convert exact, unique identity-map references in group output to native
   Feishu mentions instead of displaying inert `@name` text.
 - Resolve unmapped mention targets from exact unique current-group member names,
