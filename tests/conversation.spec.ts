@@ -9,6 +9,11 @@ describe('conversation identity', () => {
     expect(conversationKey({ ...base, replyToMessageId: 'om_1' })).toBe('chat:oc_1')
   })
 
+  it('uses the Feishu user as the durable direct-message identity', () => {
+    expect(conversationKey({ chatId: 'oc_dm', chatType: 'p2p', senderId: 'ou_user' })).toBe('user:ou_user')
+    expect(conversationKey({ chatId: 'ou_user', chatType: 'p2p', senderId: 'ou_user' })).toBe('user:ou_user')
+  })
+
   it('creates deterministic opaque bounded session ids per domain', () => {
     const a = toSessionId('feishu', 'chat:oc_secret')
     expect(a).toBe(toSessionId('feishu', 'chat:oc_secret'))

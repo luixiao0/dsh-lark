@@ -6,6 +6,10 @@ function fakeChannel() {
   const handlers = new Map<string, Function>()
   return {
     handlers,
+    rawClient: {
+      im: { v1: { chatMembers: { get: vi.fn(async () => ({ data: { items: [] } })) } } },
+      contact: { v3: { user: { get: vi.fn(async () => ({ data: {} })) } } },
+    },
     connect: vi.fn(async () => undefined), disconnect: vi.fn(async () => undefined),
     send: vi.fn(async () => ({ messageId: 'out' })),
     on: vi.fn((name: string, handler: Function) => { handlers.set(name, handler); return () => handlers.delete(name) }),
@@ -79,10 +83,28 @@ describe('startChannel', () => {
     const inbound = bridge.reply.mock.calls[0]![0]
     expect(inbound.content).toContain('<feishu_messages')
     expect(inbound.content).toContain('"senderName":"Lux"')
+    expect(inbound.content).toContain('mode="request"')
+    expect(inbound.content).not.toContain('"mentionedBot"')
+    expect(inbound.content).not.toContain('"rawContentType"')
+    expect(inbound.content).not.toContain('"createdAt"')
     expect(channel.send).toHaveBeenCalledWith('oc_1', { markdown: 'Hello **Lark**' }, { replyTo: 'om_1', replyInThread: false })
     await active.stop()
     expect(channel.disconnect).toHaveBeenCalledOnce()
     expect(bridge.dispose).toHaveBeenCalledOnce()
+  })
+
+  it('resolves a missing sender name from the Feishu group member list', async () => {
+    const channel = fakeChannel()
+    channel.rawClient.im.v1.chatMembers.get.mockResolvedValueOnce({
+      data: { items: [{ member_id: 'ou_1', name: '冯嘉宁' }] },
+    })
+    const bridge = { reply: vi.fn(async () => '收到'), dispose: vi.fn(async () => undefined) }
+    await startChannel(config(), bridge, dependencies(channel))
+
+    await channel.handlers.get('message')!(message({ senderName: undefined }))
+
+    await vi.waitFor(() => expect(bridge.reply).toHaveBeenCalledOnce())
+    expect(bridge.reply.mock.calls[0]![0].content).toContain('"senderName":"冯嘉宁"')
   })
 
   it('batches ordinary group messages per topic and suppresses an exact ambient token', async () => {

@@ -1,5 +1,7 @@
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk'
 import { conversationKey } from './conversation.ts'
+import { HULY_EVENT_CONTENT_TYPE, type HulyFeishuEvent } from './huly-events.ts'
+import type { LocalResource } from './attachments.ts'
 
 const MAX_BATCH_MESSAGES = 20
 const MAX_BATCH_CHARS = 8000
@@ -81,27 +83,29 @@ export class ConversationMessageBatcher {
   }
 }
 
-export function toAgentMessage(messages: readonly NormalizedMessage[]): NormalizedMessage {
+export function toAgentMessage(messages: readonly NormalizedMessage[], replyBindings: ReadonlyMap<string, HulyFeishuEvent> = new Map()): NormalizedMessage {
   const latest = messages.at(-1)
   if (latest === undefined) throw new TypeError('message batch cannot be empty')
+  const mode = latest.rawContentType === HULY_EVENT_CONTENT_TYPE
+    ? 'huly'
+    : isAmbientGroupBatch(messages) ? 'ambient' : 'request'
   const entries = messages.map(message => JSON.stringify({
     messageId: message.messageId,
     senderId: message.senderId,
     senderName: message.senderName,
-    mentionedBot: message.mentionedBot,
-    createdAt: toIsoTime(message.createTime),
     text: message.content,
+    resources: (message.resources as LocalResource[]).map(resource => ({
+      type: resource.type,
+      fileName: resource.fileName,
+      localPath: resource.localPath,
+    })),
+    replyToMessageId: message.replyToMessageId,
+    replyBinding: message.replyToMessageId === undefined ? undefined : replyBindings.get(message.replyToMessageId),
   })).join('\n')
   return {
     ...latest,
-    content: `<feishu_messages chat_type=${JSON.stringify(latest.chatType)} thread_id=${JSON.stringify(latest.threadId ?? '')}>\n${entries}\n</feishu_messages>`,
+    content: `<feishu_messages mode=${JSON.stringify(mode)} chat_type=${JSON.stringify(latest.chatType)} thread_id=${JSON.stringify(latest.threadId ?? '')}>\n${entries}\n</feishu_messages>`,
   }
-}
-
-function toIsoTime(value: number): string | undefined {
-  if (!Number.isFinite(value)) return undefined
-  const date = new Date(value)
-  return Number.isNaN(date.valueOf()) ? undefined : date.toISOString()
 }
 
 export function isAmbientGroupBatch(messages: readonly NormalizedMessage[]): boolean {

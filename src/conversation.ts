@@ -5,11 +5,13 @@ import type { DomainName } from './config.ts'
 export interface ConversationMessage {
   chatId: string
   chatType: 'p2p' | 'group'
+  senderId?: string
   threadId?: string
   replyToMessageId?: string
 }
 
 export function conversationKey(message: ConversationMessage): string {
+  if (message.chatType === 'p2p' && message.senderId !== undefined) return `user:${message.senderId}`
   return message.threadId === undefined
     ? `chat:${message.chatId}`
     : `thread:${message.chatId}:${message.threadId}`

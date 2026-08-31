@@ -11,3 +11,4 @@
         dmMode: open
         groupBatchDelayMs: 1500
         silentReplyToken: NO_REPLY
+        hulyEventsSecretRef: DSH_HULY_EVENTS_SHARED_SECRET

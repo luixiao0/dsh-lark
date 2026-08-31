@@ -21,6 +21,10 @@
 - 可以沿用 Harness 默认模型，也可以为飞书渠道指定模型。
 - 会话标识经过 SHA-256 处理，不会把原始 `chat_id` 写进 Session ID。
 - Harness 内部错误不会直接发送给飞书用户。
+- 可通过共享密钥 WebSocket 接收 Huly 原生通知；事件先写入本地持久收件箱再 ACK。
+- 单聊按用户 `open_id` 复用会话，主动 Huly 通知与该用户后续私聊共享上下文。
+- 收到的飞书附件会落到 owner-only 本地目录；Agent 可用 `DSH_FEISHU_FILE:` 行发送文件。
+- 主动私聊失败时可回退到主群并 @目标用户。
 
 ## 运行要求
 
@@ -248,6 +252,11 @@ Harness 重启后，插件会恢复对应的持久化 Session；如果该 Sessio
     workspace: /absolute/path/to/workspace
     agentPreset: coding
     errorMessage: 抱歉，处理这条消息时遇到了问题，请稍后重试。
+    hulyEventsUrl: wss://task.example.com/_dsh-feishu
+    hulyEventsSecretRef: DSH_HULY_EVENTS_SHARED_SECRET
+    identityMapFile: /absolute/path/to/identity-map.json
+    adminOpenId: ou_xxxxxxxxxxxxxxxx
+    fallbackChatId: oc_xxxxxxxxxxxxxxxx
 ```
 
 | 配置项 | 必填 | 默认值 | 说明 |

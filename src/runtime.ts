@@ -32,13 +32,15 @@ export class LarkRuntime {
     return this.enqueue(async () => {
       if (this.disposed) return
       let secret: string | undefined
+      let hulyEventsSecret: string | undefined
       let invalidConfig = false
       try {
         const settings = this.deps.settings()
         secret = await this.deps.resolveSecret(settings.appSecretRef) ?? settings.appSecret
+        hulyEventsSecret = settings.hulyEventsUrl === '' ? '' : await this.deps.resolveSecret(settings.hulyEventsSecretRef)
         let config: RuntimeConfig
         try {
-          config = resolveRuntimeConfig(settings, secret)
+          config = resolveRuntimeConfig(settings, secret, hulyEventsSecret)
         } catch (error) {
           invalidConfig = true
           throw error
@@ -65,7 +67,8 @@ export class LarkRuntime {
           }
         }
         const message = failure instanceof Error ? failure.message : String(failure)
-        const redacted = secret === undefined || secret === '' ? message : message.split(secret).join('[redacted]')
+        let redacted = secret === undefined || secret === '' ? message : message.split(secret).join('[redacted]')
+        if (hulyEventsSecret !== undefined && hulyEventsSecret !== '') redacted = redacted.split(hulyEventsSecret).join('[redacted]')
         this.snapshot = invalidConfig
           ? { state: 'unconfigured', message: redacted }
           : { state: 'error', message: redacted }

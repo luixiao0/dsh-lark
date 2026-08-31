@@ -4,6 +4,7 @@ export type DomainName = 'feishu' | 'lark'
 export type DirectMessageMode = 'open' | 'allowlist' | 'disabled'
 
 export const LARK_APP_SECRET_REF = 'DSH_LARK_APP_SECRET'
+export const HULY_EVENTS_SECRET_REF = 'DSH_HULY_EVENTS_SHARED_SECRET'
 export const LARK_SETTINGS_NAMESPACE = 'lark-channel'
 const DEFAULT_ERROR_MESSAGE = '抱歉，处理这条消息时遇到了问题，请稍后重试。'
 export const DEFAULT_GROUP_BATCH_DELAY_MS = 1500
@@ -28,11 +29,17 @@ export interface Config {
   workspace?: string
   agentPreset?: string
   errorMessage?: string
+  hulyEventsUrl?: string
+  hulyEventsSecretRef?: string
+  identityMapFile?: string
+  adminOpenId?: string
+  fallbackChatId?: string
 }
 
 export interface SettingsConfig extends Required<Pick<Config,
   'appId' | 'appSecretRef' | 'domain' | 'requireMention' | 'dmMode' | 'groupAllowlist' |
-  'dmAllowlist' | 'homeChatId' | 'groupBatchDelayMs' | 'silentReplyToken' | 'errorMessage'>> {
+  'dmAllowlist' | 'homeChatId' | 'groupBatchDelayMs' | 'silentReplyToken' | 'errorMessage' |
+  'hulyEventsUrl' | 'hulyEventsSecretRef' | 'identityMapFile' | 'adminOpenId' | 'fallbackChatId'>> {
   appSecret?: string
   provider?: string
   model?: string
@@ -40,9 +47,11 @@ export interface SettingsConfig extends Required<Pick<Config,
   agentPreset?: string
 }
 
-export interface RuntimeConfig extends Omit<SettingsConfig, 'appSecretRef'> {
+export interface RuntimeConfig extends Omit<SettingsConfig, 'appSecretRef' | 'hulyEventsSecretRef'> {
   appSecret: string
   appSecretRef: string
+  hulyEventsSecret: string
+  hulyEventsSecretRef: string
 }
 
 export const ConfigSchema: z<Config> = z.object({
@@ -62,11 +71,18 @@ export const ConfigSchema: z<Config> = z.object({
   workspace: z.string(),
   agentPreset: z.string(),
   errorMessage: z.string().default(DEFAULT_ERROR_MESSAGE),
+  hulyEventsUrl: z.string().default(''),
+  hulyEventsSecretRef: z.string().role('credential-ref').default(HULY_EVENTS_SECRET_REF),
+  identityMapFile: z.string().default(''),
+  adminOpenId: z.string().default(''),
+  fallbackChatId: z.string().default(''),
 })
 
 export function resolveSettingsConfig(config: Config): SettingsConfig {
   const appSecretRef = config.appSecretRef ?? LARK_APP_SECRET_REF
   if (!CREDENTIAL_REF_PATTERN.test(appSecretRef)) throw new TypeError('appSecretRef must be a POSIX environment variable name')
+  const hulyEventsSecretRef = config.hulyEventsSecretRef ?? HULY_EVENTS_SECRET_REF
+  if (!CREDENTIAL_REF_PATTERN.test(hulyEventsSecretRef)) throw new TypeError('hulyEventsSecretRef must be a POSIX environment variable name')
   const errorMessage = config.errorMessage ?? DEFAULT_ERROR_MESSAGE
   if (errorMessage.length > 500) throw new TypeError('errorMessage must not exceed 500 characters')
   const groupBatchDelayMs = config.groupBatchDelayMs ?? DEFAULT_GROUP_BATCH_DELAY_MS
@@ -89,6 +105,11 @@ export function resolveSettingsConfig(config: Config): SettingsConfig {
     groupBatchDelayMs,
     silentReplyToken,
     errorMessage,
+    hulyEventsUrl: config.hulyEventsUrl?.trim() ?? '',
+    hulyEventsSecretRef,
+    identityMapFile: config.identityMapFile?.trim() ?? '',
+    adminOpenId: config.adminOpenId?.trim() ?? '',
+    fallbackChatId: config.fallbackChatId?.trim() ?? '',
     ...(config.appSecret === undefined ? {} : { appSecret: config.appSecret }),
     ...(config.provider === undefined ? {} : { provider: config.provider }),
     ...(config.model === undefined ? {} : { model: config.model }),
@@ -97,11 +118,13 @@ export function resolveSettingsConfig(config: Config): SettingsConfig {
   }
 }
 
-export function resolveRuntimeConfig(config: SettingsConfig, resolvedSecret?: string): RuntimeConfig {
+export function resolveRuntimeConfig(config: SettingsConfig, resolvedSecret?: string, resolvedHulyEventsSecret?: string): RuntimeConfig {
   if (config.appId.trim() === '') throw new TypeError('appId is required')
   const appSecret = resolvedSecret?.trim() || config.appSecret?.trim() || ''
   if (appSecret === '') throw new TypeError('appSecret is required')
-  return { ...config, appSecret }
+  const hulyEventsSecret = resolvedHulyEventsSecret?.trim() || ''
+  if (config.hulyEventsUrl !== '' && hulyEventsSecret === '') throw new TypeError('hulyEventsSecret is required when hulyEventsUrl is configured')
+  return { ...config, appSecret, hulyEventsSecret }
 }
 
 /** @deprecated Use resolveSettingsConfig and resolveRuntimeConfig. */

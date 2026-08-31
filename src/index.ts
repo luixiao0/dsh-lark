@@ -109,7 +109,8 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
 
   settingsScope.watch(() => apiUpdateDepth > 0 ? undefined : runtime.reconcile())
   ctx.on('credentials/updated', ref => {
-    if (apiUpdateDepth === 0 && ref === currentSettings().appSecretRef) void runtime.reconcile()
+    const current = currentSettings()
+    if (apiUpdateDepth === 0 && (ref === current.appSecretRef || ref === current.hulyEventsSecretRef)) void runtime.reconcile()
   })
   ctx.effect(() => webServer.register({
     kind: 'exact',
