@@ -164,7 +164,9 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
       if (message === '') throw new TypeError('Feishu message must not be empty')
       if ((recipientInput === '') === (chatId === '')) throw new TypeError('Provide exactly one of Feishu recipient or chatId')
       if (chatId !== '') {
-        if (!chatId.startsWith('oc_')) throw new TypeError('Feishu chatId must be an exact oc_ chat identifier from the message envelope')
+        if (!chatId.startsWith('oc_') && !chatId.startsWith('ou_')) {
+          throw new TypeError('Feishu chatId must be an exact oc_ chat or ou_ user identifier from the message envelope')
+        }
         const result = await runtime.send({ chatId, markdown: message })
         return { messageId: result.messageId, targetId: chatId, targetName: 'Feishu chat' }
       }
@@ -239,10 +241,14 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
       if ((recipientInput === '') === (chatId === '')) throw new TypeError('Provide exactly one of Feishu recipient or chatId')
       const info = await stat(localPath)
       if (!info.isFile()) throw new TypeError('Feishu localPath must reference a regular file')
+      if (info.size === 0) throw new TypeError('Feishu does not accept empty files')
+      if (info.size > 30 * 1024 * 1024) throw new TypeError('Feishu file size must not exceed 30 MB')
       const fileName = basename(input.fileName?.trim() || localPath)
       if (fileName === '' || fileName === '.' || fileName === '..') throw new TypeError('Feishu fileName must not be empty')
       if (chatId !== '') {
-        if (!chatId.startsWith('oc_')) throw new TypeError('Feishu chatId must be an exact oc_ chat identifier from the message envelope')
+        if (!chatId.startsWith('oc_') && !chatId.startsWith('ou_')) {
+          throw new TypeError('Feishu chatId must be an exact oc_ chat or ou_ user identifier from the message envelope')
+        }
         const result = await runtime.send({ chatId, file: { path: localPath, fileName } })
         return { messageId: result.messageId, targetId: chatId, targetName: 'Feishu chat', fileName }
       }

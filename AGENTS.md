@@ -43,6 +43,8 @@ copy it into that workspace.
   ordinary and background final responses uses exact
   `DSH_FEISHU_FILE:/absolute/path` lines. Proactive/background work may call
   `feishu_send_file` with an exact envelope `chat_id` or mapped recipient.
+  Feishu rejects empty files and files larger than 30 MB; expose that limit
+  before upload.
 - A reply must be hydrated from Feishu before persistence. Put the quoted
   sender, parsed current text, and local resources in `quotedMessage`, and also
   pass quoted images to Harness as native image blocks. This is how a reply can
