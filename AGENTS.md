@@ -44,8 +44,10 @@ copy it into that workspace.
   interactive cards use a nested `json_card`; parse its textual `content`
   fields and retain Feishu's `sender_name` instead of emitting a generic card.
 - Commit downloaded images to Harness attachment storage and include native
-  image blocks in the same user turn. A local path is operational context, not
-  a substitute for model image input.
+  image blocks in the same user turn. Keep the original local attachment, but
+  constrain only the model-bound copy to a 4096-pixel long edge so tall
+  screenshots cannot fail the entire turn. A local path is operational context,
+  not a substitute for model image input.
 - Download attachments from the message-scoped resource API first and retain
   the legacy image/file API only as fallback. A failed attachment must remain
   visible as unavailable metadata and must never drop the surrounding message.

@@ -6,6 +6,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import sharp from 'sharp'
 import type { LocalResource } from './attachments.ts'
 import { conversationKey, summarizeTurn, toSessionId } from './conversation.ts'
 import type { ConversationMessage } from './conversation.ts'
@@ -19,6 +20,7 @@ interface AgentLike {
 }
 
 const OPERATIONAL_TASK_PATTERN = /(?:修复|修一下|安装|部署|发布|配置|迁移|实现|开发|接入|排查|调查|调研|分析一下|检查一下|改一下|改代码|改配置|清理|同步|导入|导出|升级|更新|重启|提交|推送|创建|删除|批量|fix|install|deploy|configure|migrate|implement|investigate|research|debug)/iu
+const MAX_MODEL_IMAGE_SIDE = 4096
 
 interface AgentHandleLike { agent: AgentLike; dispose(): Promise<void> }
 
@@ -112,7 +114,7 @@ export class HarnessConversationService {
     ))
     if (images.length > 0) {
       const refs = await this.deps.attachments.saveImages(await Promise.all(images.map(async image => {
-        const data = await readFile(image.localPath)
+        const data = await prepareImageForModel(await readFile(image.localPath))
         return {
           data,
           mediaType: detectImageMediaType(data),
@@ -373,6 +375,21 @@ export class HarnessConversationService {
       await handle.dispose()
     }
   }
+}
+
+async function prepareImageForModel(data: Buffer): Promise<Buffer> {
+  const image = sharp(data, { failOn: 'none' })
+  const metadata = await image.metadata()
+  if (Math.max(metadata.width ?? 0, metadata.height ?? 0) <= MAX_MODEL_IMAGE_SIDE) return data
+  return image
+    .rotate()
+    .resize({
+      width: MAX_MODEL_IMAGE_SIDE,
+      height: MAX_MODEL_IMAGE_SIDE,
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .toBuffer()
 }
 
 function shouldDelegateOperationalTask(message: InboundMessage): boolean {
