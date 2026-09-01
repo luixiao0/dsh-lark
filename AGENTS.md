@@ -9,9 +9,9 @@ copy it into that workspace.
 - All direct messages are open. Any group may use the bot, but the inbound
   policy requires an explicit mention.
 - P2P sessions are keyed by Feishu `open_id`. Proactive Huly notifications use
-  one durable session per target Huly object and Feishu recipient, so event
-  processing cannot block that person's direct-message conversation. Groups
-  and topics remain isolated by chat/thread identity.
+  one serial durable session per Feishu delivery target, so a notification
+  backlog cannot fan out or block that person's direct-message conversation.
+  Groups and topics remain isolated by chat/thread identity.
 - Huly events arrive over an authenticated outbound WebSocket, enter the local
   persistent inbox, and are ACKed only after persistence.
 - Local retry owns model/send failures after ACK. Do not replace this with a

@@ -13,10 +13,10 @@ export interface ConversationMessage {
 
 export function conversationKey(message: ConversationMessage): string {
   // Huly notifications are autonomous work, not messages from the Feishu user
-  // receiving their output. Keep one durable worker per Huly object so a sync
-  // burst cannot block that user's direct-message conversation.
+  // receiving their output. Keep one serial worker per delivery target so a
+  // backlog cannot fan out while the user's direct-message session stays free.
   if (message.messageId?.startsWith('huly:') === true) {
-    return `huly:${message.chatId}:${message.threadId ?? 'inbox'}`
+    return `huly:${message.chatId}`
   }
   if (message.chatType === 'p2p' && message.senderId !== undefined) return `user:${message.senderId}`
   return message.threadId === undefined

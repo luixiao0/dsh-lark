@@ -14,21 +14,21 @@ describe('conversation identity', () => {
     expect(conversationKey({ chatId: 'ou_user', chatType: 'p2p', senderId: 'ou_user' })).toBe('user:ou_user')
   })
 
-  it('keeps Huly object work out of the recipient direct-message session', () => {
+  it('serializes Huly work per recipient outside the direct-message session', () => {
     expect(conversationKey({
       chatId: 'ou_user',
       chatType: 'p2p',
       senderId: 'ou_user',
       messageId: 'huly:notification-id',
       threadId: 'issue-id',
-    })).toBe('huly:ou_user:issue-id')
+    })).toBe('huly:ou_user')
     expect(conversationKey({
       chatId: 'ou_user',
       chatType: 'p2p',
       senderId: 'ou_user',
       messageId: 'huly:another-notification',
-      threadId: 'issue-id',
-    })).toBe('huly:ou_user:issue-id')
+      threadId: 'another-issue-id',
+    })).toBe('huly:ou_user')
   })
 
   it('creates deterministic opaque bounded session ids per domain', () => {
