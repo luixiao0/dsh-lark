@@ -52,7 +52,7 @@ describe('HarnessConversationService', () => {
   it('resumes a persisted conversation instead of creating its session again', async () => {
     const f = fixture()
     const deps = dependencies(f)
-    const sessionId = 'lark-v2-427e3361f60f3bd896c74f6acd7d065d2e0198db'
+    const sessionId = 'lark-v3-427e3361f60f3bd896c74f6acd7d065d2e0198db'
     deps.sessionPersistence.list = vi.fn(async () => [{ id: sessionId }])
     const service = new HarnessConversationService(deps, { domain: 'lark' })
 
@@ -64,7 +64,7 @@ describe('HarnessConversationService', () => {
 
   it('reuses a live agent without trying to resume the same session', async () => {
     const f = fixture()
-    const sessionId = 'lark-v2-427e3361f60f3bd896c74f6acd7d065d2e0198db'
+    const sessionId = 'lark-v3-427e3361f60f3bd896c74f6acd7d065d2e0198db'
     const liveHandle = await f.create({ sessionId })
     f.create.mockClear()
     const deps = dependencies(f)
@@ -129,5 +129,62 @@ describe('HarnessConversationService', () => {
     const create = vi.fn(async ({ sessionId }: any) => ({ agent: { session: { id: sessionId, seq: 0, events: [{ seq: 0, type: 'turn/end', data: { reason: { kind: 'error' } } }] }, whenIdle: async () => undefined, followup() {} }, dispose: async () => undefined }))
     const service = new HarnessConversationService({ attachments: { saveImages: async () => [] }, agents: { create, resume: vi.fn(), get: () => undefined }, sessions: { flush: async () => true }, sessionPersistence: { list: async () => [] }, selection: () => ({ provider: 'p', model: 'm' }), agentPresets: { resolve: async () => ({ id: 'default' }), mount: async () => undefined }, workspaceRegistry: { list: () => [], resolveByPath: async () => undefined } }, { domain: 'feishu', workspace: '/work' })
     await expect(service.reply({ chatId: 'a', chatType: 'p2p', content: 'one' })).rejects.toThrow(/successful assistant response/)
+  })
+
+  it('keeps synthetic Huly events in the parent even when their content matches an action verb', async () => {
+    const f = fixture()
+    const service = new HarnessConversationService(dependencies(f), { domain: 'feishu' })
+    service.configureBackgroundDelivery(vi.fn(async () => undefined))
+
+    await expect(service.reply({
+      chatId: 'ou_operator',
+      chatType: 'p2p',
+      content: 'notification payload',
+      messageId: 'huly:notification-id',
+      sourceText: '重构 Wild Pony 并接入 Runtime',
+    })).resolves.toBe('answer:notification payload')
+
+    expect(f.create).toHaveBeenCalledOnce()
+    expect(f.create.mock.calls[0]![0].meta).not.toHaveProperty('origin')
+  })
+
+  it('mechanically delegates an explicit operational Feishu message', async () => {
+    const f = fixture()
+    const service = new HarnessConversationService(dependencies(f), { domain: 'feishu' })
+    service.configureBackgroundDelivery(vi.fn(async () => undefined))
+
+    await expect(service.reply({
+      chatId: 'ou_operator',
+      chatType: 'p2p',
+      content: '请修复通知系统',
+      messageId: 'om_message-id',
+      sourceText: '请修复通知系统',
+    })).resolves.toContain('任务已转到后台执行')
+
+    expect(f.create).toHaveBeenCalledTimes(2)
+    expect(f.create.mock.calls[1]![0].meta).toMatchObject({ origin: 'subagent', delegationDepth: 1 })
+  })
+
+  it('does not recover an interrupted child created from a synthetic Huly event', async () => {
+    const f = fixture()
+    const deps = dependencies(f)
+    const marker = 'DSH_FEISHU_BACKGROUND:{"chatId":"ou_operator","chatType":"p2p","messageId":"huly:notification-id"}'
+    deps.sessionPersistence = {
+      list: vi.fn(async () => [{ id: 'accidental-child', origin: 'subagent' }]),
+      inspect: vi.fn(async () => ({
+        meta: { id: 'accidental-child', origin: 'subagent' },
+        events: [
+          { seq: 0, type: 'user/message', data: { content: [{ type: 'text', text: marker }] } },
+          { seq: 1, type: 'turn/end', data: { reason: { kind: 'interrupted' } } },
+        ],
+      })),
+    }
+    const service = new HarnessConversationService(deps, { domain: 'feishu' })
+    const deliver = vi.fn(async () => undefined)
+
+    await service.recoverInterruptedBackgroundWork(deliver)
+
+    expect(f.resume).not.toHaveBeenCalled()
+    expect(deliver).not.toHaveBeenCalled()
   })
 })

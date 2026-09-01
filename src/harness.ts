@@ -145,6 +145,9 @@ export class HarnessConversationService {
         if (lastTurnEnd?.type !== 'turn/end' || lastTurnEnd.data.reason.kind !== 'interrupted') continue
         origin = backgroundWorkOrigin(inspected.events)
         if (origin === undefined) continue
+        // Older bridge versions could misclassify synthetic Huly notifications
+        // as Feishu execution requests. Never revive those accidental children.
+        if (origin.messageId?.startsWith('huly:') === true) continue
         await this.resumeInterruptedBackgroundWork(header, inspected.events, origin, deliver)
       } catch (error) {
         if (origin === undefined) continue
@@ -374,6 +377,10 @@ export class HarnessConversationService {
 
 function shouldDelegateOperationalTask(message: InboundMessage): boolean {
   if (message.messageId === undefined || !message.sourceText?.trim()) return false
+  // Mechanical delegation is only for explicit human Feishu messages. Synthetic
+  // Huly events contain issue titles and routing instructions that can match the
+  // action-verb classifier but must stay in their durable parent conversation.
+  if (!message.messageId.startsWith('om_')) return false
   if (message.chatType === 'group' && message.mentionedBot !== true) return false
   return OPERATIONAL_TASK_PATTERN.test(message.sourceText)
 }
