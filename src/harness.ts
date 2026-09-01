@@ -103,6 +103,17 @@ export class HarnessConversationService {
     this.backgroundDelivery = deliver
   }
 
+  async concealHulyWorkspaceSessions(): Promise<void> {
+    const workspace = this.config.workspace === undefined
+      ? this.deps.workspaceRegistry.list()[0]
+      : await this.deps.workspaceRegistry.resolveByPath(this.config.workspace)
+    if (workspace?.detachSession === undefined) return
+    this.hulyWorkspaceCleanup ??= this.detachHulyTransportSessions(workspace).catch((error: unknown) => {
+      console.error(`dsh-lark: Huly transport session cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    await this.hulyWorkspaceCleanup
+  }
+
   async reply(message: InboundMessage): Promise<string> {
     const delegated = await this.delegateOperationalTask(message)
     if (delegated !== undefined) return delegated
@@ -338,14 +349,11 @@ export class HarnessConversationService {
 
   private async concealHulySessions(workspace: WorkspaceLike | undefined, currentSessionId: SessionId): Promise<void> {
     if (workspace?.detachSession === undefined) return
-    this.hulyWorkspaceCleanup ??= this.detachRetiredHulySessions(workspace).catch((error: unknown) => {
-      console.error(`dsh-lark: retired Huly session cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
-    })
-    await this.hulyWorkspaceCleanup
+    await this.concealHulyWorkspaceSessions()
     await workspace.detachSession(currentSessionId)
   }
 
-  private async detachRetiredHulySessions(workspace: WorkspaceLike): Promise<void> {
+  private async detachHulyTransportSessions(workspace: WorkspaceLike): Promise<void> {
     const inspect = this.deps.sessionPersistence.inspect
     const detach = workspace.detachSession
     if (inspect === undefined || detach === undefined) return
@@ -354,7 +362,7 @@ export class HarnessConversationService {
     for (const header of headers) {
       if (!attached.has(String(header.id))) continue
       const inspected = await inspect.call(this.deps.sessionPersistence, header.id)
-      if (!isRetiredHulySession(this.config.domain, header.id, inspected.events)) continue
+      if (!isHulyTransportSession(this.config.domain, header.id, inspected.events)) continue
       await detach.call(workspace, header.id)
     }
   }
@@ -481,7 +489,7 @@ function backgroundWorkOrigin(events: readonly SessionEvent[]): BackgroundWorkOr
   return undefined
 }
 
-function isRetiredHulySession(domain: DomainName, sessionId: SessionId, events: readonly SessionEvent[]): boolean {
+function isHulyTransportSession(domain: DomainName, sessionId: SessionId, events: readonly SessionEvent[]): boolean {
   for (const event of events) {
     if (event.type !== 'user/message') continue
     const text = event.data.content
@@ -492,8 +500,10 @@ function isRetiredHulySession(domain: DomainName, sessionId: SessionId, events: 
     if (envelope === undefined) continue
     const chatId = /\bchat_id="([^"]+)"/u.exec(envelope)?.[1]
     const threadId = /\bthread_id="([^"]+)"/u.exec(envelope)?.[1]
-    if (chatId === undefined || threadId === undefined) continue
-    return String(sessionId) === String(toSessionId(domain, `huly:${chatId}:${threadId}`))
+    if (chatId === undefined) continue
+    const candidates = [toSessionId(domain, `huly:${chatId}`)]
+    if (threadId !== undefined) candidates.push(toSessionId(domain, `huly:${chatId}:${threadId}`))
+    return candidates.some(candidate => String(sessionId) === String(candidate))
   }
   return false
 }

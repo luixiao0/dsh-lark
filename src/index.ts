@@ -97,6 +97,7 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
         agentPresets,
         workspaceRegistry,
       }, config)
+      await bridge.concealHulyWorkspaceSessions()
       return startChannel(config, bridge, {
         factory: createLarkChannel,
         inbox: new PersistentMessageInbox(),
