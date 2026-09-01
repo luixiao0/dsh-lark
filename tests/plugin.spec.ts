@@ -192,8 +192,39 @@ describe('startChannel', () => {
     const active = await startChannel(config(), bridge, dependencies(channel))
     await expect(active.send({ markdown: 'summary' })).resolves.toEqual({ messageId: 'out' })
     expect(channel.send).toHaveBeenCalledWith('oc_1', { markdown: 'summary' })
+    await expect(active.send({ file: { path: '/tmp/report.pdf', fileName: 'report.pdf' } })).resolves.toEqual({ messageId: 'out' })
+    expect(channel.send).toHaveBeenCalledWith('oc_1', { file: { source: '/tmp/report.pdf', fileName: 'report.pdf' } })
     await expect(active.send({ chatId: 'oc_other', text: 'blocked' })).rejects.toThrow(/groupAllowlist/)
     await expect(active.send({ text: 'a', markdown: 'b' })).rejects.toThrow(/exactly one/)
+  })
+
+  it('delivers files declared by a completed background task', async () => {
+    const channel = fakeChannel()
+    let deliver: ((result: any) => Promise<void>) | undefined
+    const bridge = {
+      reply: vi.fn(async () => 'answer'),
+      dispose: vi.fn(async () => undefined),
+      configureBackgroundDelivery: vi.fn((next: (result: any) => Promise<void>) => { deliver = next }),
+    }
+    await startChannel(config(), bridge, dependencies(channel))
+
+    await deliver!({
+      chatId: 'oc_1',
+      chatType: 'group',
+      messageId: 'om_request',
+      requesterName: 'Dylan',
+      text: '完成\nDSH_FEISHU_FILE:/tmp/result with spaces.pdf',
+    })
+
+    expect(channel.send).toHaveBeenCalledWith(
+      'oc_1',
+      { markdown: '@Dylan 完成' },
+      { replyTo: 'om_request', replyInThread: false },
+    )
+    expect(channel.send).toHaveBeenCalledWith(
+      'oc_1',
+      { file: { source: '/tmp/result with spaces.pdf', fileName: 'result with spaces.pdf' } },
+    )
   })
 
   it('disposes conversation resources when channel disconnect fails', async () => {

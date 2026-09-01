@@ -10,6 +10,8 @@ import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { createLarkChannel } from '@larksuiteoapi/node-sdk'
+import { stat } from 'node:fs/promises'
+import { basename, isAbsolute } from 'node:path'
 import { ConfigSchema, LARK_SETTINGS_NAMESPACE, resolveSettingsConfig } from './config.ts'
 import type { Config as PluginConfig, SettingsConfig } from './config.ts'
 import { HarnessConversationService } from './harness.ts'
@@ -184,6 +186,85 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
       }
     },
   }), 'dsh-lark: proactive Feishu direct-message tool')
+
+  ctx.effect(() => tools.register({
+    name: 'feishu_send_file',
+    description: 'Upload and send one existing local file either to a mapped person or to an exact chat_id from a Feishu envelope. Provide exactly one of recipient or chatId. Direct-message failures fall back to the configured main group and mention the same person.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        recipient: {
+          type: 'string',
+          description: 'Feishu open_id, mapped Huly account/person ID, mapped Linear user ID/email, or an exact unique mapped name/alias.',
+        },
+        chatId: {
+          type: 'string',
+          description: 'Exact Feishu chat_id from the current feishu_messages envelope.',
+        },
+        localPath: {
+          type: 'string',
+          description: 'Absolute path to an existing local regular file.',
+        },
+        fileName: {
+          type: 'string',
+          description: 'Optional visible filename. Defaults to the basename of localPath.',
+        },
+      },
+      required: ['localPath'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          messageId: { type: 'string' },
+          targetId: { type: 'string' },
+          targetName: { type: 'string' },
+          fileName: { type: 'string' },
+        },
+        required: ['messageId', 'targetId', 'targetName', 'fileName'],
+      },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args) {
+      const input = args as { recipient?: unknown; chatId?: unknown; localPath?: unknown; fileName?: unknown }
+      if (typeof input.localPath !== 'string' || !isAbsolute(input.localPath)) throw new TypeError('Feishu localPath must be an absolute path')
+      if (input.recipient !== undefined && typeof input.recipient !== 'string') throw new TypeError('Feishu recipient must be a string')
+      if (input.chatId !== undefined && typeof input.chatId !== 'string') throw new TypeError('Feishu chatId must be a string')
+      if (input.fileName !== undefined && typeof input.fileName !== 'string') throw new TypeError('Feishu fileName must be a string')
+      const recipientInput = input.recipient?.trim() ?? ''
+      const chatId = input.chatId?.trim() ?? ''
+      const localPath = input.localPath.trim()
+      if ((recipientInput === '') === (chatId === '')) throw new TypeError('Provide exactly one of Feishu recipient or chatId')
+      const info = await stat(localPath)
+      if (!info.isFile()) throw new TypeError('Feishu localPath must reference a regular file')
+      const fileName = basename(input.fileName?.trim() || localPath)
+      if (fileName === '' || fileName === '.' || fileName === '..') throw new TypeError('Feishu fileName must not be empty')
+      if (chatId !== '') {
+        if (!chatId.startsWith('oc_')) throw new TypeError('Feishu chatId must be an exact oc_ chat identifier from the message envelope')
+        const result = await runtime.send({ chatId, file: { path: localPath, fileName } })
+        return { messageId: result.messageId, targetId: chatId, targetName: 'Feishu chat', fileName }
+      }
+      const identityMap = new IdentityMap(currentSettings().identityMapFile || undefined)
+      const recipient = await identityMap.resolveRecipient(recipientInput)
+      if (recipient === undefined) {
+        throw new Error(`Feishu recipient is not mapped: ${recipientInput}. Update the protected identity map before sending.`)
+      }
+      const recipientName = recipient.name?.trim() || recipientInput
+      const result = await runtime.send({
+        chatId: recipient.feishuOpenId,
+        file: { path: localPath, fileName },
+        fallbackMention: { openId: recipient.feishuOpenId, name: recipientName },
+      })
+      return {
+        messageId: result.messageId,
+        targetId: recipient.feishuOpenId,
+        targetName: recipientName,
+        fileName,
+      }
+    },
+  }), 'dsh-lark: proactive Feishu file tool')
 
   ctx.effect(() => tools.register({
     name: 'feishu_get_chat_history',

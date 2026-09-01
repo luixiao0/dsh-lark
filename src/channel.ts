@@ -84,6 +84,7 @@ export interface OutboundMessage {
   chatId?: string
   text?: string
   markdown?: string
+  file?: { path: string; fileName?: string }
   fallbackMention?: { openId: string; name: string }
 }
 
@@ -250,14 +251,64 @@ export async function startChannel(
     return channel.send(chatId, resolvedContent, mentions.length === 0 ? options : { ...options, mentions })
   }
 
+  const sendOutbound = async (message: OutboundMessage): Promise<SendResult> => {
+    const chatId = message.chatId?.trim() || config.homeChatId
+    if (chatId === '') throw new TypeError('chatId is required when homeChatId is not configured')
+    if (chatId.startsWith('oc_') && config.groupAllowlist.length > 0 && !config.groupAllowlist.includes(chatId)) {
+      throw new Error('outbound group is not in groupAllowlist')
+    }
+    const hasText = typeof message.text === 'string' && message.text !== ''
+    const hasMarkdown = typeof message.markdown === 'string' && message.markdown !== ''
+    const hasFile = typeof message.file?.path === 'string' && message.file.path !== ''
+    if (Number(hasText) + Number(hasMarkdown) + Number(hasFile) !== 1) {
+      throw new TypeError('provide exactly one non-empty text, markdown, or file value')
+    }
+    try {
+      if (hasText) return await sendMessage(chatId, { text: message.text! })
+      if (hasMarkdown) return await sendMessage(chatId, { markdown: message.markdown! })
+      return await channel.send(chatId, {
+        file: { source: message.file!.path, fileName: message.file!.fileName || basename(message.file!.path) },
+      })
+    } catch (error) {
+      const mention = message.fallbackMention
+      const fallbackChatId = config.fallbackChatId || config.homeChatId
+      if (!chatId.startsWith('ou_') || mention === undefined || mention.openId !== chatId || fallbackChatId === '') throw error
+      if (config.groupAllowlist.length > 0 && !config.groupAllowlist.includes(fallbackChatId)) throw error
+      const key = '@_user_1'
+      if (hasFile) {
+        await sendMessage(fallbackChatId, { text: '文件转发' }, {
+          mentions: [{ key, openId: mention.openId, name: mention.name }],
+        })
+        return channel.send(fallbackChatId, {
+          file: { source: message.file!.path, fileName: message.file!.fileName || basename(message.file!.path) },
+        })
+      }
+      return await sendMessage(fallbackChatId, { text: message.text ?? message.markdown! }, {
+        mentions: [{ key, openId: mention.openId, name: mention.name }],
+      })
+    }
+  }
+
   const deliverBackground = async (result: BackgroundWorkDelivery): Promise<void> => {
     const mention = result.chatType === 'group' && result.requesterName?.trim()
       ? `@${result.requesterName.trim()} `
       : ''
-    await sendMessage(result.chatId, { markdown: `${mention}${result.text}` }, result.messageId === undefined ? undefined : {
-      replyTo: result.messageId,
-      replyInThread: result.threadId !== undefined,
-    }, result.chatType === 'group')
+    const delivery = extractFileDeliveries(result.text)
+    if (delivery.text !== '') {
+      await sendMessage(result.chatId, { markdown: `${mention}${delivery.text}` }, result.messageId === undefined ? undefined : {
+        replyTo: result.messageId,
+        replyInThread: result.threadId !== undefined,
+      }, result.chatType === 'group')
+    }
+    for (const path of delivery.files) {
+      await sendOutbound({
+        chatId: result.chatId,
+        file: { path },
+        ...(result.chatType === 'p2p' && result.requesterName?.trim()
+          ? { fallbackMention: { openId: result.chatId, name: result.requesterName.trim() } }
+          : {}),
+      })
+    }
   }
   bridge.configureBackgroundDelivery?.(deliverBackground)
 
@@ -712,30 +763,7 @@ export async function startChannel(
   scheduleCatchup()
 
   return {
-    send: async message => {
-      const chatId = message.chatId?.trim() || config.homeChatId
-      if (chatId === '') throw new TypeError('chatId is required when homeChatId is not configured')
-      if (chatId.startsWith('oc_') && config.groupAllowlist.length > 0 && !config.groupAllowlist.includes(chatId)) {
-        throw new Error('outbound group is not in groupAllowlist')
-      }
-      const hasText = typeof message.text === 'string' && message.text !== ''
-      const hasMarkdown = typeof message.markdown === 'string' && message.markdown !== ''
-      if (hasText === hasMarkdown) throw new TypeError('provide exactly one non-empty text or markdown value')
-      try {
-        return hasText
-          ? await sendMessage(chatId, { text: message.text! })
-          : await sendMessage(chatId, { markdown: message.markdown! })
-      } catch (error) {
-        const mention = message.fallbackMention
-        const fallbackChatId = config.fallbackChatId || config.homeChatId
-        if (!chatId.startsWith('ou_') || mention === undefined || mention.openId !== chatId || fallbackChatId === '') throw error
-        if (config.groupAllowlist.length > 0 && !config.groupAllowlist.includes(fallbackChatId)) throw error
-        const key = '@_user_1'
-        return sendMessage(fallbackChatId, { text: message.text ?? message.markdown! }, {
-          mentions: [{ key, openId: mention.openId, name: mention.name }],
-        })
-      }
-    },
+    send: sendOutbound,
     listMessages: async query => {
       const chatId = query.chatId.trim()
       if (chatId === '') throw new TypeError('chatId is required')

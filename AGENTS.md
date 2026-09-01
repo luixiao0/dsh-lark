@@ -40,7 +40,9 @@ copy it into that workspace.
   path; filter only this application's own writes, not every `app` sender.
   WebSocket reconnection alone does not recover missed events.
 - Download inbound Feishu resources before the Agent turn. File delivery from
-  the Agent uses exact `DSH_FEISHU_FILE:/absolute/path` response lines.
+  ordinary and background final responses uses exact
+  `DSH_FEISHU_FILE:/absolute/path` lines. Proactive/background work may call
+  `feishu_send_file` with an exact envelope `chat_id` or mapped recipient.
 - A reply must be hydrated from Feishu before persistence. Put the quoted
   sender, parsed current text, and local resources in `quotedMessage`, and also
   pass quoted images to Harness as native image blocks. This is how a reply can
@@ -61,7 +63,8 @@ copy it into that workspace.
   event; re-read a message to observe its current `updated` content.
 - A failed proactive DM falls back to the configured main group and mentions
   the target user.
-- `feishu_send_message` is the Agent-facing proactive DM tool. Resolve its
+- `feishu_send_message` and `feishu_send_file` are the Agent-facing proactive
+  delivery tools. Resolve their
   recipient from a literal `open_id` or one exact identity-map key; never use
   fuzzy name matching, and fail when an explicit key matches multiple people.
   It also accepts an exact envelope `chat_id` so background work can report
