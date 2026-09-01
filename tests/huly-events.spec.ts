@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { IdentityMap } from '../src/huly-events.ts'
+import { IdentityMap, toNormalizedMessage, type HulyFeishuEvent } from '../src/huly-events.ts'
 
 const temporaryPaths: string[] = []
 
@@ -56,5 +56,34 @@ describe('IdentityMap mentions', () => {
         { key: '@_dsh_user_2', openId: 'ou_amagi', name: 'Amagi' },
       ],
     })
+  })
+})
+
+describe('Huly event context', () => {
+  it('shows readable identities without exposing routing identifiers', () => {
+    const event: HulyFeishuEvent = {
+      id: 'notification-id',
+      type: 'notification',
+      createdAt: '2026-09-01T06:49:41.745Z',
+      actor: { personId: 'actor-id', name: '滑稽' },
+      recipient: { account: 'account-id', personId: 'person-id', name: '多多' },
+      object: { class: 'tracker:class:Issue', id: 'issue-id' },
+      notification: { title: '状态更新', body: '已合并' },
+    }
+
+    const message = toNormalizedMessage(event, 'ou_private')
+    const content = JSON.parse(message.content) as Record<string, unknown>
+
+    expect(content).toMatchObject({
+      actor: { name: '滑稽' },
+      recipient: { name: '多多' },
+      delivery: { route: 'operator-fallback' },
+    })
+    expect(message.content).not.toContain('actor-id')
+    expect(message.content).not.toContain('account-id')
+    expect(message.content).not.toContain('person-id')
+    expect(message.content).not.toContain('ou_private')
+    expect(message.content).not.toContain('identity map')
+    expect(message.content).not.toContain(event.createdAt)
   })
 })

@@ -17,6 +17,10 @@ copy it into that workspace.
   template fallback; errors remain Sentry/log only until retry succeeds.
 - Identity and reply bindings are owner-only local JSON files. Identity is
   explicit and Agent-maintainable; never infer it from display names.
+- Huly account, Person, and Feishu routing identifiers are transport metadata.
+  Resolve Huly recipients before enqueue and expose only readable identity
+  names and the delivery route to the Agent; never ask the model to maintain a
+  mapping merely because an event used the operator fallback.
 - Before persistence, enrich inbound messages with the explicit identity-map
   name or the current Feishu group-member name. A lookup failure must not drop
   the message; retain the stable `open_id` and log the failure.

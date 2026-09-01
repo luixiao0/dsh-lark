@@ -240,17 +240,19 @@ export function hulyEventOf(message: NormalizedMessage): HulyFeishuEvent | undef
   return (message as NormalizedMessage & { hulyEvent?: HulyFeishuEvent }).hulyEvent
 }
 
-function toNormalizedMessage(event: HulyFeishuEvent, target: string, mapping?: IdentityMapping): NormalizedMessage {
-  const unmapped = mapping === undefined
-  const { createdAt: _createdAt, ...visibleEvent } = event
+export function toNormalizedMessage(event: HulyFeishuEvent, target: string, mapping?: IdentityMapping): NormalizedMessage {
+  const recipientName = mapping?.name?.trim() || event.recipient.name?.trim() || '未知 Huly 用户'
   const content = JSON.stringify({
-    ...visibleEvent,
+    type: event.type,
+    ...(event.actor?.name?.trim() ? { actor: { name: event.actor.name.trim() } } : {}),
+    recipient: { name: recipientName },
+    object: event.object,
+    notification: event.notification,
+    ...(event.message === undefined ? {} : { message: event.message }),
+    ...(event.attachments === undefined ? {} : { attachments: event.attachments }),
     delivery: {
-      target,
-      unmapped,
-      instruction: unmapped
-        ? 'Recipient is not mapped. Notify the operator, update the protected identity map when identity is established, then replay the work.'
-        : 'Re-read the current Huly object before acting. Decide the useful Feishu message and any autonomous follow-up work.',
+      route: mapping === undefined ? 'operator-fallback' : 'recipient',
+      instruction: 'Re-read the current Huly object before acting. Decide the useful Feishu message and any autonomous follow-up work.',
     },
   })
   return {
