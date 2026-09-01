@@ -45,7 +45,10 @@ export class ConversationMessageBatcher {
   push(message: NormalizedMessage): void {
     if (this.closed) return
     const key = conversationKey(message)
-    const immediate = message.chatType === 'p2p' || message.mentionedBot || this.delayMs === 0
+    const hulyEvent = message.rawContentType === HULY_EVENT_CONTENT_TYPE
+    // Huly commonly emits status and assignee notifications for the same
+    // object together. Debounce that burst into one autonomous agent turn.
+    const immediate = !hulyEvent && (message.chatType === 'p2p' || message.mentionedBot || this.delayMs === 0)
     if (immediate) {
       const buffered = this.take(key)
       void this.run(key, [...buffered, message])

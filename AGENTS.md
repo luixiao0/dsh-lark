@@ -8,19 +8,21 @@ copy it into that workspace.
 
 - All direct messages are open. Any group may use the bot, but the inbound
   policy requires an explicit mention.
-- P2P sessions are keyed by Feishu `open_id`, so a user's direct messages and
-  proactive Huly notifications share one durable session. Groups and topics
-  remain isolated by chat/thread identity.
+- P2P sessions are keyed by Feishu `open_id`. Proactive Huly notifications use
+  one durable session per target Huly object and Feishu recipient, so event
+  processing cannot block that person's direct-message conversation. Groups
+  and topics remain isolated by chat/thread identity.
 - Huly events arrive over an authenticated outbound WebSocket, enter the local
   persistent inbox, and are ACKed only after persistence.
 - Local retry owns model/send failures after ACK. Do not replace this with a
   template fallback; errors remain Sentry/log only until retry succeeds.
 - Identity and reply bindings are owner-only local JSON files. Identity is
   explicit and Agent-maintainable; never infer it from display names.
-- Huly account, Person, and Feishu routing identifiers are transport metadata.
-  Resolve Huly recipients before enqueue and expose only readable identity
-  names and the delivery route to the Agent; never ask the model to maintain a
-  mapping merely because an event used the operator fallback.
+- Huly account, Person, notification-recipient, and Feishu routing identifiers
+  are transport metadata. Do not expose them or the delivery route to the
+  Agent: a notification owner is not evidence of the object's assignee or the
+  human who should be notified. Expose actor names and business object data;
+  the Agent must re-read the object to determine any useful recipient.
 - Synthetic `huly:<notificationId>` inbox keys are internal deduplication
   metadata, not Feishu message IDs. Never expose them in the Agent envelope or
   pass them to Feishu message APIs.

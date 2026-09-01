@@ -217,7 +217,7 @@ export class HulyEventClient {
     const mapping = await this.options.identityMap.resolve(event)
     const target = mapping?.feishuOpenId || this.options.adminOpenId || this.options.fallbackChatId
     if (target === '') throw new Error(`No Feishu target for unmapped Huly recipient ${event.recipient.personId ?? event.recipient.account ?? 'unknown'}`)
-    const message = toNormalizedMessage(event, target, mapping)
+    const message = toNormalizedMessage(event, target)
     const accepted = await this.options.accept(message)
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'ack', id: event.id }))
     if (accepted) this.options.deliver(message)
@@ -240,27 +240,21 @@ export function hulyEventOf(message: NormalizedMessage): HulyFeishuEvent | undef
   return (message as NormalizedMessage & { hulyEvent?: HulyFeishuEvent }).hulyEvent
 }
 
-export function toNormalizedMessage(event: HulyFeishuEvent, target: string, mapping?: IdentityMapping): NormalizedMessage {
-  const recipientName = mapping?.name?.trim() || event.recipient.name?.trim() || '未知 Huly 用户'
+export function toNormalizedMessage(event: HulyFeishuEvent, target: string): NormalizedMessage {
   const content = JSON.stringify({
     type: event.type,
     ...(event.actor?.name?.trim() ? { actor: { name: event.actor.name.trim() } } : {}),
-    recipient: { name: recipientName },
     object: event.object,
     notification: event.notification,
     ...(event.message === undefined ? {} : { message: event.message }),
     ...(event.attachments === undefined ? {} : { attachments: event.attachments }),
-    delivery: {
-      route: mapping === undefined ? 'operator-fallback' : 'recipient',
-      instruction: 'Re-read the current Huly object before acting. Decide the useful Feishu message and any autonomous follow-up work.',
-    },
   })
   return {
     messageId: `huly:${event.id}`,
     chatId: target,
     chatType: target.startsWith('ou_') ? 'p2p' : 'group',
-    // P2P sessions are keyed by the Feishu user so proactive events and that
-    // user's later direct messages resume the same durable DSH session.
+    // senderId remains the Feishu delivery target; conversationKey isolates
+    // synthetic Huly events by object before deriving the durable session.
     senderId: target,
     senderName: event.actor?.name ?? 'Huly',
     content,

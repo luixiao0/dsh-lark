@@ -5,12 +5,19 @@ import type { DomainName } from './config.ts'
 export interface ConversationMessage {
   chatId: string
   chatType: 'p2p' | 'group'
+  messageId?: string
   senderId?: string
   threadId?: string
   replyToMessageId?: string
 }
 
 export function conversationKey(message: ConversationMessage): string {
+  // Huly notifications are autonomous work, not messages from the Feishu user
+  // receiving their output. Keep one durable worker per Huly object so a sync
+  // burst cannot block that user's direct-message conversation.
+  if (message.messageId?.startsWith('huly:') === true) {
+    return `huly:${message.chatId}:${message.threadId ?? 'inbox'}`
+  }
   if (message.chatType === 'p2p' && message.senderId !== undefined) return `user:${message.senderId}`
   return message.threadId === undefined
     ? `chat:${message.chatId}`

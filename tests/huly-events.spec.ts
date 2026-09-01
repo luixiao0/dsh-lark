@@ -60,7 +60,7 @@ describe('IdentityMap mentions', () => {
 })
 
 describe('Huly event context', () => {
-  it('shows readable identities without exposing routing identifiers', () => {
+  it('shows business context without exposing transport recipients or routing', () => {
     const event: HulyFeishuEvent = {
       id: 'notification-id',
       type: 'notification',
@@ -76,14 +76,17 @@ describe('Huly event context', () => {
 
     expect(content).toMatchObject({
       actor: { name: '滑稽' },
-      recipient: { name: '多多' },
-      delivery: { route: 'operator-fallback' },
+      object: { class: 'tracker:class:Issue', id: 'issue-id' },
+      notification: { title: '状态更新', body: '已合并' },
     })
+    expect(content).not.toHaveProperty('recipient')
+    expect(content).not.toHaveProperty('delivery')
     expect(message.content).not.toContain('actor-id')
     expect(message.content).not.toContain('account-id')
     expect(message.content).not.toContain('person-id')
     expect(message.content).not.toContain('ou_private')
     expect(message.content).not.toContain('identity map')
+    expect(message.content).not.toContain('operator-fallback')
     expect(message.content).not.toContain(event.createdAt)
   })
 })
