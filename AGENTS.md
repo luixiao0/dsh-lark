@@ -21,6 +21,9 @@ copy it into that workspace.
   Resolve Huly recipients before enqueue and expose only readable identity
   names and the delivery route to the Agent; never ask the model to maintain a
   mapping merely because an event used the operator fallback.
+- Synthetic `huly:<notificationId>` inbox keys are internal deduplication
+  metadata, not Feishu message IDs. Never expose them in the Agent envelope or
+  pass them to Feishu message APIs.
 - Before persistence, enrich inbound messages with the explicit identity-map
   name or the current Feishu group-member name. A lookup failure must not drop
   the message; retain the stable `open_id` and log the failure.

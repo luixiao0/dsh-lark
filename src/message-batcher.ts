@@ -106,10 +106,11 @@ export function toAgentMessage(messages: readonly NormalizedMessage[], replyBind
     : isAmbientGroupBatch(messages) ? 'ambient' : 'request'
   const entries = messages.map(message => {
     const contextual = message as ContextualNormalizedMessage
+    const hulyEvent = message.rawContentType === HULY_EVENT_CONTENT_TYPE
     const quotedKeys = new Set(contextual.quotedMessage?.resources.map(resource => resource.fileKey) ?? [])
     const directResources = (message.resources as LocalResource[]).filter(resource => !quotedKeys.has(resource.fileKey))
     return JSON.stringify({
-      messageId: message.messageId,
+      messageId: hulyEvent ? undefined : message.messageId,
       senderId: message.senderId,
       senderName: message.senderName?.trim() || `Feishu user (${message.senderId})`,
       sentAt: formatLocalTime(message.createTime),
