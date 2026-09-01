@@ -21,7 +21,12 @@ function fixture() {
   const create = vi.fn(async ({ sessionId }: { sessionId: string }) => createHandle(sessionId))
   const resume = vi.fn(async ({ resumeSessionId }: { resumeSessionId: string }) => createHandle(resumeSessionId))
   const flush = vi.fn(async () => true)
-  const workspace = { path: '/first-workspace', attachSession: vi.fn(async () => undefined) }
+  const workspace = {
+    path: '/first-workspace',
+    sessionIds: [] as string[],
+    attachSession: vi.fn(async () => undefined),
+    detachSession: vi.fn(async () => undefined),
+  }
   const mount = vi.fn(async () => undefined)
   const resolve = vi.fn(async (id?: string) => ({ id: id ?? 'default-preset' }))
   return { create, resume, flush, agents, workspace, mount, resolve }
@@ -146,6 +151,43 @@ describe('HarnessConversationService', () => {
 
     expect(f.create).toHaveBeenCalledOnce()
     expect(f.create.mock.calls[0]![0].meta).not.toHaveProperty('origin')
+    expect(f.workspace.attachSession).not.toHaveBeenCalled()
+    expect(f.workspace.detachSession).toHaveBeenCalledWith(f.create.mock.calls[0]![0].sessionId)
+  })
+
+  it('detaches only retired per-object Huly sessions from the workspace', async () => {
+    const f = fixture()
+    const deps = dependencies(f)
+    const retiredId = 'lark-v3-de15596236eb600a5a592b06401a672599e76397'
+    const normalId = 'lark-v3-b1866693e6d77a54a638fb97a4a6c8005da8aafa'
+    f.workspace.sessionIds = [retiredId, normalId]
+    deps.sessionPersistence.list = vi.fn(async () => [{ id: retiredId }, { id: normalId }])
+    deps.sessionPersistence.inspect = vi.fn(async (id: string) => ({
+      meta: { id },
+      events: [{
+        seq: 0,
+        type: 'user/message',
+        data: {
+          content: [{
+            type: 'text',
+            text: id === retiredId
+              ? '<feishu_messages mode="huly" chat_id="ou_operator" thread_id="task-1">event</feishu_messages>'
+              : '<feishu_messages mode="direct" chat_id="ou_operator">message</feishu_messages>',
+          }],
+        },
+      }],
+    }))
+    const service = new HarnessConversationService(deps, { domain: 'feishu' })
+
+    await service.reply({
+      chatId: 'ou_operator',
+      chatType: 'p2p',
+      content: 'notification payload',
+      messageId: 'huly:notification-id',
+    })
+
+    expect(f.workspace.detachSession).toHaveBeenCalledWith(retiredId)
+    expect(f.workspace.detachSession).not.toHaveBeenCalledWith(normalId)
   })
 
   it('mechanically delegates an explicit operational Feishu message', async () => {

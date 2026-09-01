@@ -11,7 +11,11 @@ copy it into that workspace.
 - P2P sessions are keyed by Feishu `open_id`. Proactive Huly notifications use
   one serial durable session per Feishu delivery target, so a notification
   backlog cannot fan out or block that person's direct-message conversation.
-  Groups and topics remain isolated by chat/thread identity.
+  Groups and topics remain isolated by chat/thread identity. Huly transport
+  sessions are internal and must not be attached to the visible workspace.
+  Detach retired per-object Huly sessions only after their stored envelope
+  deterministically reproduces that legacy session ID; never classify by title
+  or by the mere presence of a Huly event in mixed conversation history.
 - Huly events arrive over an authenticated outbound WebSocket, enter the local
   persistent inbox, and are ACKed only after persistence.
 - Local retry owns model/send failures after ACK. Do not replace this with a

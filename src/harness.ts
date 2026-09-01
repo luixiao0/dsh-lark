@@ -26,7 +26,9 @@ interface AgentHandleLike { agent: AgentLike; dispose(): Promise<void> }
 
 interface WorkspaceLike {
   path: string
+  sessionIds?: readonly SessionId[]
   attachSession(sessionId: unknown): Promise<void>
+  detachSession?(sessionId: unknown): Promise<void>
 }
 
 export interface HarnessDependencies {
@@ -92,6 +94,7 @@ export class HarnessConversationService {
   private readonly handles = new Map<string, Promise<AgentHandleLike>>()
   private readonly recoveryHandles = new Set<AgentHandleLike>()
   private readonly backgroundHandles = new Set<AgentHandleLike>()
+  private hulyWorkspaceCleanup: Promise<void> | undefined
   private backgroundDelivery: ((result: BackgroundWorkDelivery) => Promise<void>) | undefined
 
   constructor(private readonly deps: HarnessDependencies, private readonly config: HarnessBridgeConfig) {}
@@ -321,12 +324,39 @@ export class HarnessConversationService {
         setup,
       })
     try {
-      await workspace?.attachSession(sessionId)
+      if (key.startsWith('huly:')) {
+        await this.concealHulySessions(workspace, sessionId)
+      } else {
+        await workspace?.attachSession(sessionId)
+      }
     } catch (error: unknown) {
       await handle.dispose()
       throw error
     }
     return handle
+  }
+
+  private async concealHulySessions(workspace: WorkspaceLike | undefined, currentSessionId: SessionId): Promise<void> {
+    if (workspace?.detachSession === undefined) return
+    this.hulyWorkspaceCleanup ??= this.detachRetiredHulySessions(workspace).catch((error: unknown) => {
+      console.error(`dsh-lark: retired Huly session cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    await this.hulyWorkspaceCleanup
+    await workspace.detachSession(currentSessionId)
+  }
+
+  private async detachRetiredHulySessions(workspace: WorkspaceLike): Promise<void> {
+    const inspect = this.deps.sessionPersistence.inspect
+    const detach = workspace.detachSession
+    if (inspect === undefined || detach === undefined) return
+    const attached = new Set((workspace.sessionIds ?? []).map(String))
+    const headers = await this.deps.sessionPersistence.list()
+    for (const header of headers) {
+      if (!attached.has(String(header.id))) continue
+      const inspected = await inspect.call(this.deps.sessionPersistence, header.id)
+      if (!isRetiredHulySession(this.config.domain, header.id, inspected.events)) continue
+      await detach.call(workspace, header.id)
+    }
   }
 
   private async resumeInterruptedBackgroundWork(
@@ -449,6 +479,23 @@ function backgroundWorkOrigin(events: readonly SessionEvent[]): BackgroundWorkOr
     }
   }
   return undefined
+}
+
+function isRetiredHulySession(domain: DomainName, sessionId: SessionId, events: readonly SessionEvent[]): boolean {
+  for (const event of events) {
+    if (event.type !== 'user/message') continue
+    const text = event.data.content
+      .filter(block => block.type === 'text')
+      .map(block => block.text)
+      .join('\n')
+    const envelope = /<feishu_messages\s+mode="huly"([^>]*)>/u.exec(text)?.[1]
+    if (envelope === undefined) continue
+    const chatId = /\bchat_id="([^"]+)"/u.exec(envelope)?.[1]
+    const threadId = /\bthread_id="([^"]+)"/u.exec(envelope)?.[1]
+    if (chatId === undefined || threadId === undefined) continue
+    return String(sessionId) === String(toSessionId(domain, `huly:${chatId}:${threadId}`))
+  }
+  return false
 }
 
 function detectImageMediaType(data: Uint8Array): ImageMediaType {
