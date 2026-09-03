@@ -13,6 +13,8 @@ interface SettingsPayload {
     dmMode: 'open' | 'allowlist' | 'disabled'
     groupAllowlist: string[]
     dmAllowlist: string[]
+    hrAdminOpenIds: string[]
+    leaveApprovalCode: string
     homeChatId: string
     groupBatchDelayMs: number
     silentReplyToken: string
@@ -34,6 +36,8 @@ interface FormState {
   dmMode: 'open' | 'allowlist' | 'disabled'
   groupAllowlist: string
   dmAllowlist: string
+  hrAdminOpenIds: string
+  leaveApprovalCode: string
   homeChatId: string
   groupBatchDelayMs: string
   silentReplyToken: string
@@ -69,7 +73,7 @@ interface LarkSettingsSectionProps {
 
 const EMPTY_FORM: FormState = {
   appId: '', appSecret: '', domain: 'feishu', requireMention: true, dmMode: 'open',
-  groupAllowlist: '', dmAllowlist: '', homeChatId: '', groupBatchDelayMs: '1500', silentReplyToken: 'NO_REPLY',
+  groupAllowlist: '', dmAllowlist: '', hrAdminOpenIds: '', leaveApprovalCode: '', homeChatId: '', groupBatchDelayMs: '1500', silentReplyToken: 'NO_REPLY',
   provider: '', model: '', workspace: '', agentPreset: '', errorMessage: '',
 }
 
@@ -91,6 +95,8 @@ export function LarkSettingsSection({ t, loadModels }: LarkSettingsSectionProps)
       dmMode: next.settings.dmMode,
       groupAllowlist: next.settings.groupAllowlist.join('\n'),
       dmAllowlist: next.settings.dmAllowlist.join('\n'),
+      hrAdminOpenIds: (next.settings.hrAdminOpenIds ?? []).join('\n'),
+      leaveApprovalCode: next.settings.leaveApprovalCode ?? '',
       homeChatId: next.settings.homeChatId,
       groupBatchDelayMs: String(next.settings.groupBatchDelayMs),
       silentReplyToken: next.settings.silentReplyToken,
@@ -141,6 +147,7 @@ export function LarkSettingsSection({ t, loadModels }: LarkSettingsSectionProps)
       expectedRevision: payload?.revision,
       appId: form.appId.trim(), domain: form.domain, requireMention: form.requireMention, dmMode: form.dmMode,
       groupAllowlist: lines(form.groupAllowlist), dmAllowlist: lines(form.dmAllowlist),
+      hrAdminOpenIds: lines(form.hrAdminOpenIds), leaveApprovalCode: form.leaveApprovalCode.trim(),
       homeChatId: form.homeChatId.trim(), groupBatchDelayMs: Number(form.groupBatchDelayMs),
       silentReplyToken: form.silentReplyToken.trim(), errorMessage: form.errorMessage,
     }
@@ -234,6 +241,15 @@ export function LarkSettingsSection({ t, loadModels }: LarkSettingsSectionProps)
           <label><span>{t('groupBatchDelayMs')}</span><Input type="number" min="0" max="30000" step="100" value={form.groupBatchDelayMs} onChange={event => update('groupBatchDelayMs', event.target.value)} /></label>
         </div>
         <label><span>{t('silentReplyToken')}</span><Input value={form.silentReplyToken} onChange={event => update('silentReplyToken', event.target.value)} /></label>
+      </div>
+
+      <div className="dsh-lark-card">
+        <h3>{t('hr')}</h3>
+        <div className="dsh-lark-grid">
+          <label><span>{t('leaveApprovalCode')}</span><Input value={form.leaveApprovalCode} onChange={event => update('leaveApprovalCode', event.target.value)} /></label>
+          <label><span>{t('hrAdminOpenIds')}</span><textarea value={form.hrAdminOpenIds} onChange={event => update('hrAdminOpenIds', event.target.value)} placeholder={t('onePerLine')} /></label>
+        </div>
+        <p className="dsh-lark-detail">{t('hrHint')}</p>
       </div>
 
       <div className="dsh-lark-card">

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add native Feishu attendance and approval tools for self-service leave,
+  approval tracking, recall, and current-user task actions.
+- Add native Feishu calendar tools for visible-calendar discovery, shared
+  calendar events, primary-calendar free/busy, and confirmed shared-calendar
+  creation.
 - Mechanically delegate explicit operational Feishu requests to continuable
   background Agents before the parent model runs, with immediate acknowledgement,
   durable parent context, progress prompts, and final-delivery fallback.

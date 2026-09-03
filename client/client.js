@@ -39,6 +39,8 @@ const EMPTY_FORM = {
 	dmMode: "open",
 	groupAllowlist: "",
 	dmAllowlist: "",
+	hrAdminOpenIds: "",
+	leaveApprovalCode: "",
 	homeChatId: "",
 	groupBatchDelayMs: "1500",
 	silentReplyToken: "NO_REPLY",
@@ -65,6 +67,8 @@ function LarkSettingsSection({ t, loadModels }) {
 			dmMode: next.settings.dmMode,
 			groupAllowlist: next.settings.groupAllowlist.join("\n"),
 			dmAllowlist: next.settings.dmAllowlist.join("\n"),
+			hrAdminOpenIds: (next.settings.hrAdminOpenIds ?? []).join("\n"),
+			leaveApprovalCode: next.settings.leaveApprovalCode ?? "",
 			homeChatId: next.settings.homeChatId,
 			groupBatchDelayMs: String(next.settings.groupBatchDelayMs),
 			silentReplyToken: next.settings.silentReplyToken,
@@ -120,6 +124,8 @@ function LarkSettingsSection({ t, loadModels }) {
 			dmMode: form.dmMode,
 			groupAllowlist: lines(form.groupAllowlist),
 			dmAllowlist: lines(form.dmAllowlist),
+			hrAdminOpenIds: lines(form.hrAdminOpenIds),
+			leaveApprovalCode: form.leaveApprovalCode.trim(),
 			homeChatId: form.homeChatId.trim(),
 			groupBatchDelayMs: Number(form.groupBatchDelayMs),
 			silentReplyToken: form.silentReplyToken.trim(),
@@ -316,6 +322,27 @@ function LarkSettingsSection({ t, loadModels }) {
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: "dsh-lark-card",
 						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", { children: t("hr") }),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								className: "dsh-lark-grid",
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("leaveApprovalCode") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(__deepseek_ai_dsh_client_ui_primitives.Input, {
+									value: form.leaveApprovalCode,
+									onChange: (event) => update("leaveApprovalCode", event.target.value)
+								})] }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("hrAdminOpenIds") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("textarea", {
+									value: form.hrAdminOpenIds,
+									onChange: (event) => update("hrAdminOpenIds", event.target.value),
+									placeholder: t("onePerLine")
+								})] })]
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								className: "dsh-lark-detail",
+								children: t("hrHint")
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "dsh-lark-card",
+						children: [
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", { children: t("agent") }),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								className: "dsh-lark-grid",
@@ -476,6 +503,10 @@ const dictionaries = {
 		homeChatId: "默认主动发送群",
 		groupBatchDelayMs: "群消息聚合窗口（毫秒）",
 		silentReplyToken: "静默回复标记",
+		hr: "假勤与审批",
+		leaveApprovalCode: "请假审批定义 Code",
+		hrAdminOpenIds: "假勤管理员 open_id",
+		hrHint: "配置审批定义 Code 后，员工可在飞书中查询打卡、提交请假并跟踪审批；管理员可查询其他员工。",
 		agent: "Agent 配置",
 		provider: "Provider",
 		model: "Model",
@@ -522,6 +553,10 @@ const dictionaries = {
 		homeChatId: "Default outbound chat",
 		groupBatchDelayMs: "Group batching window (ms)",
 		silentReplyToken: "Silent reply token",
+		hr: "Attendance & approvals",
+		leaveApprovalCode: "Leave approval definition Code",
+		hrAdminOpenIds: "HR administrator open_ids",
+		hrHint: "After an approval definition Code is configured, employees can read attendance, submit leave, and track approvals in Feishu; administrators can query other employees.",
 		agent: "Agent configuration",
 		provider: "Provider",
 		model: "Model",

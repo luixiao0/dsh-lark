@@ -34,12 +34,15 @@ export interface Config {
   identityMapFile?: string
   adminOpenId?: string
   fallbackChatId?: string
+  hrAdminOpenIds?: string[]
+  leaveApprovalCode?: string
 }
 
 export interface SettingsConfig extends Required<Pick<Config,
   'appId' | 'appSecretRef' | 'domain' | 'requireMention' | 'dmMode' | 'groupAllowlist' |
   'dmAllowlist' | 'homeChatId' | 'groupBatchDelayMs' | 'silentReplyToken' | 'errorMessage' |
-  'hulyEventsUrl' | 'hulyEventsSecretRef' | 'identityMapFile' | 'adminOpenId' | 'fallbackChatId'>> {
+  'hulyEventsUrl' | 'hulyEventsSecretRef' | 'identityMapFile' | 'adminOpenId' | 'fallbackChatId' |
+  'hrAdminOpenIds' | 'leaveApprovalCode'>> {
   appSecret?: string
   provider?: string
   model?: string
@@ -76,6 +79,8 @@ export const ConfigSchema: z<Config> = z.object({
   identityMapFile: z.string().default(''),
   adminOpenId: z.string().default(''),
   fallbackChatId: z.string().default(''),
+  hrAdminOpenIds: z.array(z.string()).default([]),
+  leaveApprovalCode: z.string().default(''),
 })
 
 export function resolveSettingsConfig(config: Config): SettingsConfig {
@@ -93,6 +98,7 @@ export function resolveSettingsConfig(config: Config): SettingsConfig {
   if (silentReplyToken === '' || silentReplyToken.length > 64 || /\s/u.test(silentReplyToken)) {
     throw new TypeError('silentReplyToken must be 1-64 non-whitespace characters')
   }
+  const hrAdminOpenIds = [...new Set((config.hrAdminOpenIds ?? []).map(value => value.trim()).filter(Boolean))]
   return {
     appId: config.appId ?? '',
     appSecretRef,
@@ -110,6 +116,8 @@ export function resolveSettingsConfig(config: Config): SettingsConfig {
     identityMapFile: config.identityMapFile?.trim() ?? '',
     adminOpenId: config.adminOpenId?.trim() ?? '',
     fallbackChatId: config.fallbackChatId?.trim() ?? '',
+    hrAdminOpenIds,
+    leaveApprovalCode: config.leaveApprovalCode?.trim() ?? '',
     ...(config.appSecret === undefined ? {} : { appSecret: config.appSecret }),
     ...(config.provider === undefined ? {} : { provider: config.provider }),
     ...(config.model === undefined ? {} : { model: config.model }),

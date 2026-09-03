@@ -72,6 +72,23 @@ copy it into that workspace.
   It also accepts an exact envelope `chat_id` so background work can report
   back to the originating group or direct chat without another delivery
   service.
+- Attendance and leave remain in this same Feishu SDK client. The current
+  message sender is bound to the Agent session by the bridge; never accept a
+  model-supplied identity for self-service HR operations. Ordinary employees
+  can read only their own attendance and approval data. `hrAdminOpenIds` may
+  authorize cross-employee reads, but it never lets an administrator approve
+  or reject another person's approval task. Leave submission reads the
+  tenant's configured approval definition at call time because field IDs and
+  options are tenant-specific. Do not use `attendance.userApproval.create`
+  for normal Feishu leave requests: that endpoint writes external approval
+  results back into attendance.
+- Calendar tools use the same cached Feishu SDK client. The app may list and
+  search only calendars visible to its application identity; a user's primary
+  calendar is not public merely because the user belongs to the tenant. Omit a
+  calendar ID only for the current sender's primary calendar. Cross-user
+  primary-calendar or free/busy reads require `adminOpenId` or
+  `hrAdminOpenIds`. Shared-calendar creation is an administrator-only write,
+  defaults to `show_only_free_busy`, and requires conversational confirmation.
 - Continuable Feishu subagents start with a `DSH_FEISHU_BACKGROUND:` routing
   marker. On startup, resume only children whose latest durable turn ended as
   `interrupted`; verify side effects before retrying and deliver their final

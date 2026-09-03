@@ -170,7 +170,9 @@ export class HulyEventClient {
   stop(): void {
     this.stopped = true
     if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = undefined
     if (this.authTimer !== undefined) clearTimeout(this.authTimer)
+    this.authTimer = undefined
     this.socket?.close()
     this.socket = undefined
   }
@@ -180,11 +182,16 @@ export class HulyEventClient {
     const socket = new WebSocket(this.options.url)
     this.socket = socket
     socket.addEventListener('open', () => {
+      if (this.stopped || this.socket !== socket) {
+        socket.close()
+        return
+      }
       this.attempts = 0
       socket.send(JSON.stringify({ type: 'auth', secret: this.options.secret }))
       this.authTimer = setTimeout(() => socket.close(1008, 'Authentication timeout'), 10_000)
     })
     socket.addEventListener('message', event => {
+      if (this.stopped || this.socket !== socket) return
       const next = this.operations.then(
         () => this.handleMessage(socket, String(event.data)),
         () => this.handleMessage(socket, String(event.data)),
@@ -194,14 +201,28 @@ export class HulyEventClient {
         socket.close(1011, 'Event persistence failed')
       })
     })
-    socket.addEventListener('error', () => this.log('error', 'dsh-lark: Huly event bridge error'))
-    socket.addEventListener('close', event => {
-      if (this.authTimer !== undefined) clearTimeout(this.authTimer)
-      this.authTimer = undefined
-      if (this.socket === socket) this.socket = undefined
-      if (!this.stopped) this.log('warn', `dsh-lark: Huly event bridge closed (${event.code}${event.reason === '' ? '' : `: ${event.reason}`})`)
-      if (!this.stopped) this.scheduleReconnect()
+    socket.addEventListener('error', () => {
+      this.log('error', 'dsh-lark: Huly event bridge error')
+      // Node WebSocket implementations may emit error without a later close.
+      // Reconnect from either event so the durable Kafka backlog cannot stall.
+      this.reconnectAfterDisconnect(socket)
+      try {
+        socket.close()
+      } catch {}
     })
+    socket.addEventListener('close', event => {
+      if (this.stopped || this.socket !== socket) return
+      this.log('warn', `dsh-lark: Huly event bridge closed (${event.code}${event.reason === '' ? '' : `: ${event.reason}`})`)
+      this.reconnectAfterDisconnect(socket)
+    })
+  }
+
+  private reconnectAfterDisconnect(socket: WebSocket): void {
+    if (this.stopped || this.socket !== socket) return
+    if (this.authTimer !== undefined) clearTimeout(this.authTimer)
+    this.authTimer = undefined
+    this.socket = undefined
+    this.scheduleReconnect()
   }
 
   private async handleMessage(socket: WebSocket, payload: string): Promise<void> {
@@ -224,9 +245,13 @@ export class HulyEventClient {
   }
 
   private scheduleReconnect(): void {
+    if (this.reconnectTimer !== undefined) return
     const delay = Math.min(30_000, 500 * (2 ** this.attempts++))
     this.log('warn', `dsh-lark: Huly event bridge reconnecting in ${delay}ms`)
-    this.reconnectTimer = setTimeout(() => this.connect(), delay)
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined
+      this.connect()
+    }, delay)
   }
 
   private log(level: 'info' | 'warn' | 'error', message: string): void {

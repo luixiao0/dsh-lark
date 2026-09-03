@@ -4,6 +4,7 @@ import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-session'
@@ -11,10 +12,12 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { createLarkChannel } from '@larksuiteoapi/node-sdk'
 import { stat } from 'node:fs/promises'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, isAbsolute } from 'node:path'
 import { ConfigSchema, LARK_SETTINGS_NAMESPACE, resolveSettingsConfig } from './config.ts'
 import type { Config as PluginConfig, SettingsConfig } from './config.ts'
 import { HarnessConversationService } from './harness.ts'
+import type { FeishuRequesterIdentity, RequesterContextStore } from './harness.ts'
 import { startChannel } from './channel.ts'
 import type { OutboundMessage } from './channel.ts'
 import { PersistentMessageInbox } from './inbox.ts'
@@ -22,6 +25,9 @@ import { IdentityMap } from './huly-events.ts'
 import { LarkRuntime } from './runtime.ts'
 import { createSettingsApi } from './settings-api.ts'
 import { handleSettingsRequest, SETTINGS_PATH } from './web.ts'
+import { FeishuHrService, registerFeishuHrTools } from './feishu-hr.ts'
+import type { FeishuHrToolRegistry } from './feishu-hr.ts'
+import { FeishuCalendarService, registerFeishuCalendarTools } from './feishu-calendar.ts'
 
 export interface LarkDeliveryService {
   send(message: OutboundMessage): ReturnType<LarkRuntime['send']>
@@ -31,23 +37,13 @@ export interface LarkDeliveryService {
   recallMessage(messageId: string): ReturnType<LarkRuntime['recallMessage']>
 }
 
-interface LarkToolRegistry {
-  register(definition: {
-    name: string
-    description: string
-    parameters: Record<string, unknown>
-    output: {
-      schema: Record<string, unknown>
-      render(args: unknown, value: unknown): Array<{ type: 'text'; text: string }>
-    }
-    execute(args: unknown): Promise<unknown>
-  }): () => void
-}
-
 declare module '@deepseek-ai/cordis' {
   interface Context {
     larkDelivery: LarkDeliveryService
-    tools: LarkToolRegistry
+    tools: FeishuHrToolRegistry
+  }
+  interface Events {
+    'credentials/reference-updated'(ref: CredentialRef): void
   }
 }
 
@@ -85,6 +81,24 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
   const namespace = settingsNamespace(LARK_SETTINGS_NAMESPACE)
   const currentSettings = (): SettingsConfig => resolveSettingsConfig(settingsScope.get())
   let apiUpdateDepth = 0
+  const requesterContexts = new Map<string, FeishuRequesterIdentity>()
+  const requesterContext: RequesterContextStore = {
+    set: (sessionId, identity) => {
+      if (identity === undefined) requesterContexts.delete(sessionId)
+      else requesterContexts.set(sessionId, identity)
+    },
+    get: sessionId => requesterContexts.get(sessionId),
+  }
+  const hr = new FeishuHrService({
+    settings: currentSettings,
+    requesterContext,
+    resolveSecret: async ref => (await credentials.resolve(credentialRef(ref)))?.value,
+  })
+  const calendar = new FeishuCalendarService({
+    settings: currentSettings,
+    requesterContext,
+    client: () => hr.getClient(),
+  })
 
   const runtime = new LarkRuntime({
     settings: currentSettings,
@@ -98,7 +112,7 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
         selection: () => defaultModel.currentSelection(),
         agentPresets,
         workspaceRegistry,
-      }, config)
+      }, { ...config, requesterContext })
       await bridge.concealHulyWorkspaceSessions()
       return startChannel(config, bridge, {
         factory: createLarkChannel,
@@ -118,6 +132,8 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
     recallMessage: (messageId: string) => runtime.recallMessage(messageId),
   }
   ctx.provide('larkDelivery', delivery)
+  ctx.effect(() => registerFeishuHrTools(tools, hr), 'dsh-lark: Feishu HR tools')
+  ctx.effect(() => registerFeishuCalendarTools(tools, calendar), 'dsh-lark: Feishu calendar tools')
   ctx.effect(() => tools.register({
     name: 'feishu_send_message',
     description: 'Send a proactive Feishu message either to one mapped person or to an exact chat_id from a Feishu envelope. Provide exactly one of recipient or chatId. If Feishu rejects a direct message, notify the same person by mentioning them in the configured fallback group.',
@@ -369,7 +385,7 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
 
   const api = createSettingsApi({
     getSettings: currentSettings,
-    revision: () => settings.describe({ redactSecrets: true }).find(item => item.ns === namespace)?.revision ?? 0,
+    revision: () => settings.describe({ redactSecrets: true }).find((item: { ns: string; revision: number }) => item.ns === namespace)?.revision ?? 0,
     beginUpdate: () => { apiUpdateDepth += 1 },
     endUpdate: () => { apiUpdateDepth -= 1 },
     updateSettings: (patch, unset, expectedRevision) => settings.mutate(namespace, [
@@ -386,14 +402,14 @@ export async function apply(ctx: Context, rawConfig: PluginConfig): Promise<void
   })
 
   settingsScope.watch(() => apiUpdateDepth > 0 ? undefined : runtime.reconcile())
-  ctx.on('credentials/updated', ref => {
+  ctx.on('credentials/reference-updated', ref => {
     const current = currentSettings()
-    if (apiUpdateDepth === 0 && (ref === current.appSecretRef || ref === current.hulyEventsSecretRef)) void runtime.reconcile()
+    if (apiUpdateDepth === 0 && (String(ref) === current.appSecretRef || String(ref) === current.hulyEventsSecretRef)) void runtime.reconcile()
   })
   ctx.effect(() => webServer.register({
     kind: 'exact',
     path: SETTINGS_PATH,
-    handler: (req, res) => handleSettingsRequest(req, res, api),
+    handler: (req: IncomingMessage, res: ServerResponse) => handleSettingsRequest(req, res, api),
   }), 'dsh-lark: settings page')
   ctx.effect(() => () => runtime.dispose(), 'dsh-lark: runtime')
   await runtime.reconcile()

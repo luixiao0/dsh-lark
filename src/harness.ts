@@ -60,6 +60,19 @@ export interface HarnessBridgeConfig {
   agentPreset?: string
   provider?: string
   model?: string
+  requesterContext?: RequesterContextStore
+}
+
+export interface FeishuRequesterIdentity {
+  openId: string
+  name?: string
+  chatId: string
+  chatType: 'p2p' | 'group'
+}
+
+export interface RequesterContextStore {
+  set(sessionId: string, identity: FeishuRequesterIdentity | undefined): void
+  get(sessionId: string): FeishuRequesterIdentity | undefined
 }
 
 export interface InboundMessage extends ConversationMessage {
@@ -119,6 +132,7 @@ export class HarnessConversationService {
     if (delegated !== undefined) return delegated
     const key = conversationKey(message)
     const handle = await this.getOrCreate(key)
+    this.rememberRequester(handle.agent, message)
     const agent = handle.agent
     await agent.whenIdle()
     const firstSeq = agent.session.seq
@@ -209,6 +223,7 @@ export class HarnessConversationService {
       ...(message.senderId === undefined ? {} : { requesterId: message.senderId }),
     }
     const marker = `DSH_FEISHU_BACKGROUND:${JSON.stringify(origin)}`
+    this.rememberRequester(handle.agent, message)
     const firstSeq = handle.agent.session.seq
     parent.agent.inject?.(createUserMessage({
       content: [{ type: 'text', text: `系统状态：消息 ${message.messageId ?? '(unknown)'} 已机械委派给后台 Agent；主 Session 不要重复执行。` }],
@@ -386,6 +401,14 @@ export class HarnessConversationService {
     const handle = await this.deps.agents.resume({ resumeSessionId: header.id, agentOptions: selection, setup })
     this.recoveryHandles.add(handle)
     try {
+      if (origin.requesterId !== undefined) {
+        this.config.requesterContext?.set(String(handle.agent.session.id), {
+          openId: origin.requesterId,
+          chatId: origin.chatId,
+          chatType: origin.chatType,
+          ...(origin.requesterName?.trim() ? { name: origin.requesterName.trim() } : {}),
+        })
+      }
       const workspacePath = header.cwd ?? this.config.workspace
       const workspace = workspacePath === undefined
         ? this.deps.workspaceRegistry.list()[0]
@@ -412,6 +435,20 @@ export class HarnessConversationService {
       this.recoveryHandles.delete(handle)
       await handle.dispose()
     }
+  }
+
+  private rememberRequester(agent: AgentLike, message: InboundMessage): void {
+    const senderId = message.messageId?.startsWith('huly:') === true ? undefined : message.senderId
+    if (senderId === undefined) {
+      this.config.requesterContext?.set(String(agent.session.id), undefined)
+      return
+    }
+    this.config.requesterContext?.set(String(agent.session.id), {
+      openId: senderId,
+      chatId: message.chatId,
+      chatType: message.chatType,
+      ...(message.senderName?.trim() ? { name: message.senderName.trim() } : {}),
+    })
   }
 }
 

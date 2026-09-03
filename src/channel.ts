@@ -244,11 +244,16 @@ export async function startChannel(
     const value = 'text' in content
       ? content.text
       : 'markdown' in content && typeof content.markdown === 'string' ? content.markdown : undefined
-    if (!resolveGroupMentions || value === undefined) return channel.send(chatId, content, options)
+    if (!resolveGroupMentions || value === undefined) {
+      return options === undefined ? channel.send(chatId, content) : channel.send(chatId, content, options)
+    }
     const resolved = await identityMap.resolveMentions(value, await groupMembers(chatId))
     const resolvedContent = 'text' in content ? { text: resolved.text } : { markdown: resolved.text }
     const mentions = [...(options?.mentions ?? []), ...resolved.mentions]
-    return channel.send(chatId, resolvedContent, mentions.length === 0 ? options : { ...options, mentions })
+    const resolvedOptions = mentions.length === 0 ? options : { ...options, mentions }
+    return resolvedOptions === undefined
+      ? channel.send(chatId, resolvedContent)
+      : channel.send(chatId, resolvedContent, resolvedOptions)
   }
 
   const sendOutbound = async (message: OutboundMessage): Promise<SendResult> => {
@@ -747,8 +752,9 @@ export async function startChannel(
   void bridge.recoverInterruptedBackgroundWork?.(deliverBackground).catch(error => {
     logger.warn(`dsh-lark: interrupted background recovery failed: ${error instanceof Error ? error.message : String(error)}`)
   })
-  const hulyEvents = config.hulyEventsUrl === '' ? undefined : new HulyEventClient({
-    url: config.hulyEventsUrl,
+  const hulyEventsUrl = config.hulyEventsUrl?.trim() ?? ''
+  const hulyEvents = hulyEventsUrl === '' ? undefined : new HulyEventClient({
+    url: hulyEventsUrl,
     secret: config.hulyEventsSecret,
     identityMap,
     adminOpenId: config.adminOpenId,

@@ -38,6 +38,12 @@ Direct messages and explicit mentions flush immediately. P2P identity uses the s
 
 The plugin provides `larkDelivery` only inside the Cordis Host. User `open_id` targets are allowed; a non-empty `groupAllowlist` constrains group targets. Huly events use a shared-secret WebSocket, explicit identity mapping, persistent reply bindings, and DM-to-main-group fallback. The Service is event-driven and contains no cron or periodic review scheduler.
 
+The Huly client reconnects after either a WebSocket `close` or `error`. Some
+Node WebSocket implementations emit `error` without a later `close`; relying on
+`close` alone silently stalls the Kafka backlog. Reconnect scheduling is
+single-flight, and stale socket callbacks are ignored so an `error` followed by
+`close` cannot create parallel connections.
+
 The Agent can page through currently visible chat history, re-read one message with current `updated`/`deleted` state and locally downloaded resources, and edit or recall messages through explicit tools. Feishu emits `im.message.recalled_v1`, which is delivered as a system entry to the same conversation. Feishu exposes no corresponding message-edited event, so edited content is observed only through a fresh message/history read. App-bot cards are readable through these explicit APIs even when their original event was not delivered.
 
 Another Feishu app bot is not a reliable live event source: Feishu may retain

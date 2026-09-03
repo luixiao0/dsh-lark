@@ -115,7 +115,7 @@ describe('startChannel', () => {
     const bridge = { reply: vi.fn(async () => '收到'), dispose: vi.fn(async () => undefined) }
     await startChannel(config(), bridge, dependencies(channel))
 
-    await channel.handlers.get('message')!(message({ senderName: undefined }))
+    await channel.handlers.get('message')!(message({ senderName: undefined, chatType: 'group' }))
 
     await vi.waitFor(() => expect(bridge.reply).toHaveBeenCalledOnce())
     expect(bridge.reply.mock.calls[0]![0].content).toContain('"senderName":"冯嘉宁"')

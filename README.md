@@ -27,6 +27,9 @@
 - 单聊按用户 `open_id` 复用会话，主动 Huly 通知与该用户后续私聊共享上下文。
 - 收到的飞书附件会落到 owner-only 本地目录；Agent 可用 `DSH_FEISHU_FILE:` 行发送文件。
 - 主动私聊失败时可回退到主群并 @目标用户。
+- 提供原生假勤工具：员工可查询自己的打卡和已通过假勤记录、提交请假审批、查看审批状态、查询自己的审批待办并撤回；配置在 `hrAdminOpenIds` 中的管理员可查询其他员工。
+- 提交请假时会实时读取 `leaveApprovalCode` 对应的飞书审批定义，按租户实际表单字段组装请求，不在本地复制字段 ID 或选项。
+- 提供原生日历工具：列出和搜索应用可见的日历、读取共享日历日程、查询本人或管理员指定员工的主日历忙闲；配置的管理员可以创建共享日历。
 
 ## 运行要求
 
@@ -65,7 +68,7 @@ npx @deepseek-ai/dsh web
 
 ### 添加权限
 
-默认配置下，应用需要开通以下三个权限：
+默认配置下，应用需要开通以下消息权限：
 
 | 权限标识 | 控制台中的权限名称 | 用途 | 是否必需 |
 | --- | --- | --- | --- |
@@ -103,6 +106,37 @@ npx @deepseek-ai/dsh web
 | `im:message.group_msg` | 获取群组中所有消息 | 配合 `requireMention: false` 接收群内全部消息 | 仅关闭 @限制时需要 |
 
 `im:message.group_msg` 的权限范围更大，通常需要企业管理员审批。默认的 `requireMention: true` 不需要申请这个权限。
+
+### 开通假勤与审批权限
+
+要启用假勤工具，在同一个自建应用的“权限管理”中开通考勤、审批和通讯录相关权限，并把应用的通讯录可见范围覆盖需要查询的员工。不同租户的控制台名称和权限合并状态可能不同，优先按权限标识搜索：
+
+| 权限标识 | 用途 |
+| --- | --- |
+| `attendance:task:readonly` | 查询每日打卡结果和考勤审批数据 |
+| `approval:approval` | 读取审批定义并创建请假审批 |
+| `approval:approval:readonly` | 读取审批实例详情 |
+| `approval:approval.list:readonly` | 查询审批列表和审批任务 |
+| `contact:user.base:readonly` | 根据消息发送者读取员工信息 |
+| `contact:user.employee:readonly` | 读取员工受雇信息（如需使用租户工号路径时使用） |
+| `contact:user.employee_id:readonly` | 返回考勤 API 所需的员工 `user_id`，以 `employee_type=employee_id` 查询 |
+| `contact:contact:readonly_as_app` | 以应用身份读取通讯录；若租户将该能力拆分，请按控制台提示开通等价权限 |
+| `calendar:calendar:readonly` | 读取日历、日程和忙闲 |
+| `calendar:calendar` | 创建共享日历 |
+
+考勤和审批权限通常需要企业管理员审批并发布新版本后才生效。当前考勤查询接口明确需要 `attendance:task:readonly`；缺少它时飞书会返回 99991672，而不是员工没有打卡记录。假勤 API 只返回应用可见范围内的数据；代码层仍会按当前 Feishu `open_id` 限制员工自查，跨员工读取还需要 `hrAdminOpenIds`。
+
+### 日历
+
+日历工具只读取应用身份实际可见的日历。公共或共享日历可以通过 `feishu_list_calendars`、`feishu_search_calendars` 和 `feishu_get_calendar_events` 使用；个人主日历默认只读取当前发送者，跨员工主日历和忙闲查询需要 `adminOpenId` 或 `hrAdminOpenIds`。日历 API 不会因为成员属于同一租户就自动公开私人日程。
+
+`feishu_create_shared_calendar` 只允许配置的管理员调用，默认创建 `show_only_free_busy` 日历。只有用户明确要求公开日程详情时才使用 `public`，并且创建前必须在对话中确认名称、用途和可见范围。
+
+### 配置请假审批
+
+在飞书审批后台打开要使用的请假流程，从流程 URL 或定义详情中取得 `approval_code`，填入 Harness 的 `lark-channel.leaveApprovalCode`。也可以在本地配置页面的“假勤与审批”中填写。`hrAdminOpenIds` 每行填写一个允许查看其他员工假勤的 Feishu `open_id`。
+
+员工对机器人说“请假”时，Agent 会先补齐假期类型、带时区的开始和结束时间、时长、事由，并读取表单定义；展示摘要得到员工确认后才创建真实审批实例。审批实例的撤回、同意和拒绝也要求会话确认。`feishu_get_leave_definition` 可用于检查字段 ID 和选项，无法自动识别的租户自定义字段通过 `formValues` 传入。
 
 有些企业会直接批准范围更大的 `im:message` 权限，它也可以覆盖消息读取和发送场景，但本插件不要求使用这个宽泛权限。优先申请上表中的最小权限即可。
 
